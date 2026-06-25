@@ -55,7 +55,7 @@ These values are based on the provided pod-22 lab details and should be adjusted
 |---|---|
 | vCenter | `10.23.22.10` |
 | ESXi host | `10.23.22.11` |
-| Ansible controller | `10.23.22.12` |
+| Ansible controller / bastion | `10.23.22.12` / Ubuntu 24.04.4 LTS |
 | AD DNS | `10.23.22.100` |
 | Base domain | `poc.local` |
 | Cluster name | `hub-sno` |
@@ -82,22 +82,52 @@ hub-sno-0.hub-sno.poc.local -> 10.23.22.90
 
 ---
 
-## Prerequisites on the Ansible controller
+## Prerequisites on the Ubuntu 24.04.4 LTS bastion
 
-Recommended controller: `RedHat-VM01` / RHEL 9.7.
+The Ansible controller for this lab is the Ubuntu bastion VM:
+
+| Item | Value |
+|---|---|
+| Bastion VM | `RedHat-VM01` |
+| Bastion IP | `10.23.22.12` |
+| OS | Ubuntu 24.04.4 LTS |
+| Role | Ansible control node, OpenShift installer host, vSphere automation runner |
+
+Use the included bootstrap script from the Ubuntu bastion:
 
 ```bash
-sudo dnf install -y git python3 python3-pip nmstate openssl jq tar
-python3 -m pip install --user pyvmomi requests
-ansible-galaxy collection install -r requirements.yml
+cd ocp-sno-vsphere-ansible
+./scripts/bootstrap-ubuntu-24.04.sh
+source .venv/bin/activate
 ```
 
-You also need the OpenShift client and installer binaries available in `PATH`:
+By default the script downloads the OpenShift client and installer from the `stable-4.21` client stream. To pin a specific client/installer version, run:
 
 ```bash
+OPENSHIFT_VERSION=4.21.0 ./scripts/bootstrap-ubuntu-24.04.sh
+```
+
+The bootstrap installs the Ubuntu packages, creates a Python virtual environment, installs the Python module requirements, installs the Ansible Galaxy collections, and places `oc`, `kubectl`, and `openshift-install` in `/usr/local/bin`.
+
+Validate the bastion before running the cluster automation:
+
+```bash
+source .venv/bin/activate
 oc version --client
+kubectl version --client
 openshift-install version
+ansible --version
+ansible-galaxy collection list | egrep 'community.vmware|ansible.windows|ansible.utils'
 ```
+
+The Ubuntu-specific requirements are split into two files:
+
+```text
+requirements-python.txt   # Python packages installed into .venv
+requirements.yml          # Ansible Galaxy collections
+```
+
+See [`docs/ubuntu-bastion.md`](docs/ubuntu-bastion.md) for the full Ubuntu package list, venv setup, proxy notes, and validation steps.
 
 ---
 
@@ -112,6 +142,7 @@ inventories/pod22/group_vars/all.yml
 Create your private vault file from the example:
 
 ```bash
+source .venv/bin/activate
 cp inventories/pod22/group_vars/vault.yml.example inventories/pod22/group_vars/vault.yml
 ansible-vault encrypt inventories/pod22/group_vars/vault.yml
 ansible-vault edit inventories/pod22/group_vars/vault.yml
@@ -122,6 +153,14 @@ Put your real vCenter password, pull secret, and SSH public key in the encrypted
 ---
 
 ## Run the SNO hub build
+
+Run all commands from the Ubuntu bastion with the repo virtual environment active:
+
+```bash
+source .venv/bin/activate
+```
+
+Then run:
 
 ```bash
 ansible-playbook -i inventories/pod22/hosts.yml playbooks/00_preflight.yml --ask-vault-pass

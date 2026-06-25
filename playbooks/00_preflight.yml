@@ -3,6 +3,22 @@
   hosts: ansible_controller
   gather_facts: true
   tasks:
+    - name: Show bastion OS
+      ansible.builtin.debug:
+        msg:
+          - "Ansible controller: {{ inventory_hostname }}"
+          - "OS: {{ ansible_distribution }} {{ ansible_distribution_version }}"
+          - "Python: {{ ansible_python.executable }}"
+
+    - name: Confirm expected Ubuntu bastion version
+      ansible.builtin.assert:
+        that:
+          - ansible_distribution == 'Ubuntu'
+          - ansible_distribution_version is version('24.04', '>=')
+        fail_msg: >-
+          This repo is currently set up for the Ubuntu 24.04.x LTS bastion.
+          Run scripts/bootstrap-ubuntu-24.04.sh first, or adjust the preflight if using another OS.
+
     - name: Show target plan
       ansible.builtin.debug:
         msg:
@@ -19,10 +35,44 @@
       ansible.builtin.command: "bash -lc 'command -v {{ item }}'"
       changed_when: false
       loop:
-        - openshift-install
+        - ansible-playbook
+        - curl
+        - git
+        - jq
+        - kubectl
         - oc
-        - nmstatectl
+        - openshift-install
         - python3
+        - tar
+
+    - name: Check optional nmstatectl command
+      ansible.builtin.command: bash -lc 'command -v nmstatectl'
+      changed_when: false
+      failed_when: false
+      register: nmstatectl_check
+
+    - name: Show nmstatectl status
+      ansible.builtin.debug:
+        msg: >-
+          nmstatectl {{ 'found at ' ~ nmstatectl_check.stdout if nmstatectl_check.rc == 0 else 'not found. This is acceptable; OpenShift still consumes the rendered NMState YAML.' }}
+
+    - name: Check required Python modules in current Ansible interpreter
+      ansible.builtin.command: >-
+        {{ ansible_python.executable }} -c
+        "import yaml, requests, netaddr, jmespath, pyVmomi, pyVim; print('python modules ok')"
+      changed_when: false
+
+    - name: Check optional WinRM Python module for AD DNS automation
+      ansible.builtin.command: >-
+        {{ ansible_python.executable }} -c "import winrm; print('winrm module ok')"
+      changed_when: false
+      failed_when: false
+      register: winrm_check
+
+    - name: Show WinRM module status
+      ansible.builtin.debug:
+        msg: >-
+          pywinrm {{ 'is installed; AD DNS automation can use WinRM.' if winrm_check.rc == 0 else 'is not installed; skip AD DNS automation or install requirements-python.txt in the venv.' }}
 
     - name: Validate static IPs are in the machine CIDR
       ansible.builtin.assert:
