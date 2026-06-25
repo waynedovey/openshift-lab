@@ -1,0 +1,46 @@
+---
+- name: Preflight checks for SNO on vSphere
+  hosts: ansible_controller
+  gather_facts: true
+  tasks:
+    - name: Show target plan
+      ansible.builtin.debug:
+        msg:
+          - "Cluster: {{ cluster_name }}.{{ base_domain }}"
+          - "SNO node IP: {{ sno_node.ip }}"
+          - "API VIP: {{ api_vip }}"
+          - "Ingress VIP: {{ ingress_vip }}"
+          - "vCenter: {{ vcenter_hostname }}"
+          - "ESXi host: {{ vsphere_esxi_hostname }}"
+          - "Datastore: {{ vsphere_datastore }}"
+          - "Networks: {{ vm_network_eth0 }}, {{ vm_network_eth1 }}"
+
+    - name: Check required local commands
+      ansible.builtin.command: "bash -lc 'command -v {{ item }}'"
+      changed_when: false
+      loop:
+        - openshift-install
+        - oc
+        - nmstatectl
+        - python3
+
+    - name: Validate static IPs are in the machine CIDR
+      ansible.builtin.assert:
+        that:
+          - sno_node.ip | ansible.utils.ipaddr(machine_cidr)
+          - api_vip | ansible.utils.ipaddr(machine_cidr)
+          - ingress_vip | ansible.utils.ipaddr(machine_cidr)
+        fail_msg: "SNO node IP, API VIP, and Ingress VIP must be inside {{ machine_cidr }}."
+
+    - name: Check vCenter API is reachable
+      community.vmware.vmware_datacenter_info:
+        hostname: "{{ vcenter_hostname }}"
+        username: "{{ vcenter_username }}"
+        password: "{{ vcenter_password }}"
+        validate_certs: "{{ validate_certs }}"
+      delegate_to: localhost
+      register: dc_info
+
+    - name: Show vCenter datacenters found
+      ansible.builtin.debug:
+        var: dc_info.datacenter_info

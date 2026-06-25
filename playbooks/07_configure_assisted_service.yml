@@ -1,0 +1,45 @@
+---
+- name: Configure Assisted Service storage on the ACM hub
+  hosts: ansible_controller
+  gather_facts: false
+  environment:
+    KUBECONFIG: "{{ hub_kubeconfig }}"
+  tasks:
+    - name: End play when Assisted Service config is disabled
+      ansible.builtin.meta: end_play
+      when: not assisted_service_configure | bool
+
+    - name: Wait for AgentServiceConfig CRD
+      ansible.builtin.command: oc get crd agentserviceconfigs.agent-install.openshift.io
+      register: asc_crd
+      changed_when: false
+      retries: 80
+      delay: 15
+      until: asc_crd.rc == 0
+
+    - name: Render AgentServiceConfig
+      ansible.builtin.template:
+        src: "{{ repo_root }}/templates/acm/04-agentserviceconfig.yaml.j2"
+        dest: "{{ acm_rendered_dir }}/04-agentserviceconfig.yaml"
+        mode: '0600'
+
+    - name: Apply AgentServiceConfig
+      ansible.builtin.command: "oc apply -f {{ acm_rendered_dir }}/04-agentserviceconfig.yaml"
+      changed_when: true
+
+    - name: Wait for assisted-service deployment to be available if present
+      ansible.builtin.shell: |
+        set -o pipefail
+        ns=$(oc get deploy -A | awk '/assisted-service/ {print $1; exit}')
+        if [ -z "$ns" ]; then
+          echo "assisted-service deployment not found yet"
+          exit 1
+        fi
+        oc -n "$ns" rollout status deploy/assisted-service --timeout=5m
+      args:
+        executable: /bin/bash
+      register: assisted_rollout
+      changed_when: false
+      retries: 20
+      delay: 30
+      until: assisted_rollout.rc == 0

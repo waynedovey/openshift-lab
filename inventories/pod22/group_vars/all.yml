@@ -1,0 +1,257 @@
+---
+# ---------------------------------------------------------------------------
+# OpenShift release / cluster identity
+# ---------------------------------------------------------------------------
+ocp_version: "4.21"
+cluster_name: hub-sno
+base_domain: poc.local
+cluster_fqdn: "{{ cluster_name }}.{{ base_domain }}"
+
+# ---------------------------------------------------------------------------
+# Static IP plan
+# ---------------------------------------------------------------------------
+machine_cidr: 10.23.22.0/24
+machine_cidr_prefix: 24
+gateway: 10.23.22.1
+dns_servers:
+  - 10.23.22.100
+
+sno_node:
+  hostname: hub-sno-0
+  fqdn: hub-sno-0.hub-sno.poc.local
+  ip: 10.23.22.90
+  # These are VMware VM NIC MACs, not iDRAC MACs.
+  # Keep them unique and make sure vCenter accepts the chosen static MAC range.
+  mac_eth0: "00:50:56:23:22:90"
+  mac_eth1: "00:50:56:23:22:91"
+  primary_interface: ens192
+  secondary_interface: ens224
+
+api_vip: 10.23.22.91
+ingress_vip: 10.23.22.92
+
+# OpenShift internal networks
+cluster_network_cidr: 10.128.0.0/14
+cluster_network_host_prefix: 23
+service_network_cidr: 172.30.0.0/16
+network_type: OVNKubernetes
+
+# ---------------------------------------------------------------------------
+# vSphere / VMware
+# ---------------------------------------------------------------------------
+vcenter_hostname: 10.23.22.10
+vcenter_username: administrator@vsphere.local
+vcenter_password: "{{ vault_vcenter_password }}"
+validate_certs: false
+
+# Change these to match vCenter inventory names.
+# This starter uses the standalone ESXi host through vCenter because the provided lab lists b08-31 as the ESXi host.
+# If your host is inside a vSphere cluster, swap the vmware_guest task to use cluster instead of esxi_hostname.
+vsphere_datacenter: Datacenter
+vsphere_esxi_hostname: 10.23.22.11
+vsphere_resource_pool: Resources
+vsphere_folder: /Datacenter/vm
+vsphere_datastore: datastore1
+
+# Port groups. These must map to access VLANs on the ESXi/vSwitch side.
+vm_network_eth0: VLAN3522
+vm_network_eth1: VLAN522
+
+# SNO VM sizing. Increase disk for ACM / hub workloads if needed.
+sno_vm_name: hub-sno
+sno_vm_cpu: 16
+sno_vm_memory_mb: 65536
+sno_vm_disk_gb: 250
+sno_vm_guest_id: rhel9_64Guest
+sno_vm_firmware: efi
+
+# Datastore path where the generated agent ISO will be uploaded.
+iso_datastore_folder: iso/ocp
+iso_datastore_name: "{{ cluster_name }}-agent.x86_64.iso"
+iso_datastore_path: "{{ iso_datastore_folder }}/{{ iso_datastore_name }}"
+iso_vsphere_path: "[{{ vsphere_datastore }}] {{ iso_datastore_path }}"
+
+# ---------------------------------------------------------------------------
+# Build paths on the Ansible controller
+# ---------------------------------------------------------------------------
+repo_root: "{{ playbook_dir }}/.."
+build_root: "{{ repo_root }}/build/{{ cluster_name }}"
+install_dir: "{{ build_root }}/install"
+rendered_dir: "{{ build_root }}/rendered"
+agent_iso_local: "{{ install_dir }}/agent.x86_64.iso"
+
+# These come from vault.yml
+pull_secret: "{{ vault_pull_secret }}"
+ssh_pub_key: "{{ vault_ssh_public_key }}"
+
+# ---------------------------------------------------------------------------
+# AD DNS optional automation
+# ---------------------------------------------------------------------------
+ad_dns_zone: poc.local
+ad_dns_records:
+  - name: "api.{{ cluster_name }}"
+    type: A
+    value: "{{ api_vip }}"
+  - name: "api-int.{{ cluster_name }}"
+    type: A
+    value: "{{ api_vip }}"
+  - name: "*.apps.{{ cluster_name }}"
+    type: A
+    value: "{{ ingress_vip }}"
+  - name: "{{ sno_node.hostname }}.{{ cluster_name }}"
+    type: A
+    value: "{{ sno_node.ip }}"
+
+# ---------------------------------------------------------------------------
+# ACM hub bootstrap
+# ---------------------------------------------------------------------------
+hub_kubeconfig: "{{ install_dir }}/auth/kubeconfig"
+
+acm_namespace: open-cluster-management
+acm_operatorgroup_name: open-cluster-management-group
+# Check the available channel on your catalog if this changes:
+# oc get packagemanifest advanced-cluster-management -n openshift-marketplace -o jsonpath='{.status.channels[*].name}'
+acm_subscription_channel: release-2.16
+acm_install_plan_approval: Automatic
+acm_operator_source: redhat-operators
+acm_operator_source_namespace: openshift-marketplace
+acm_multiclusterhub_name: multiclusterhub
+# Basic is much lighter and is preferred for a lab/SNO hub.
+acm_availability_config: Basic
+acm_disable_hub_self_management: false
+
+# Assisted service persistent storage. Leave storageClass blank to use the cluster default StorageClass.
+assisted_service_configure: true
+assisted_service_storage_class: ""
+assisted_service_database_storage: 10Gi
+assisted_service_filesystem_storage: 100Gi
+assisted_service_image_storage: 50Gi
+
+# ---------------------------------------------------------------------------
+# Managed bare-metal cluster deployed by ACM / Assisted Installer
+# ---------------------------------------------------------------------------
+bm_cluster_name: bm-spoke-01
+bm_base_domain: poc.local
+bm_fqdn: "{{ bm_cluster_name }}.{{ bm_base_domain }}"
+bm_clusterset: pod22-baremetal
+
+# Release image used by the managed bare-metal cluster.
+# Keep this aligned with a valid OpenShift release payload available to your environment.
+bm_cluster_image_set_name: "openshift-v{{ ocp_version }}"
+bm_cluster_release_image: "quay.io/openshift-release-dev/ocp-release:{{ ocp_version }}.0-x86_64"
+
+bm_machine_cidr: 10.23.22.0/24
+bm_machine_cidr_prefix: 24
+bm_gateway: 10.23.22.1
+bm_dns_servers:
+  - 10.23.22.100
+bm_api_vip: 10.23.22.120
+bm_ingress_vip: 10.23.22.121
+
+bm_cluster_network_cidr: 10.132.0.0/14
+bm_cluster_network_host_prefix: 23
+bm_service_network_cidr: 172.31.0.0/16
+bm_network_type: OVNKubernetes
+
+# 3 masters + 3 workers by default. For compact 3-node, disable b08-36, b09-33, b09-34 and set worker count to 0.
+bm_control_plane_count: 3
+bm_worker_count: 3
+bm_pull_secret_name: pull-secret
+bm_enable_ironic_agent: true
+idrac_enforce_same_firmware: true
+
+# These BMC addresses assume no provisioning network and use Redfish virtual media.
+# Confirm the System path on each iDRAC. Dell commonly uses /redfish/v1/Systems/System.Embedded.1
+idrac_redfish_system_path: /redfish/v1/Systems/System.Embedded.1
+
+# IMPORTANT: The 10.23.22.80-85 addresses below are treated as iDRAC/BMC addresses.
+# The OpenShift host OS static IPs are set separately as 10.23.22.110-115.
+# Change the boot_mac values if the listed BC:97:E1 values are not the NICs cabled to VLAN 3522.
+bm_nodes:
+  - name: b08-33
+    hostname: b08-33
+    role: master
+    enabled: true
+    bmc_ip: 10.23.22.80
+    bmc_address: "redfish-virtualmedia://10.23.22.80{{ idrac_redfish_system_path }}"
+    boot_mac: "BC:97:E1:C3:F6:E0"
+    ip: 10.23.22.110
+    primary_interface: eno1
+    secondary_interface: eno2
+    secondary_mac: ""
+    idrac_firmware_expected: "7.30.30.51"
+  - name: b08-34
+    hostname: b08-34
+    role: master
+    enabled: true
+    bmc_ip: 10.23.22.81
+    bmc_address: "redfish-virtualmedia://10.23.22.81{{ idrac_redfish_system_path }}"
+    boot_mac: "BC:97:E1:7E:99:60"
+    ip: 10.23.22.111
+    primary_interface: eno1
+    secondary_interface: eno2
+    secondary_mac: ""
+    idrac_firmware_expected: "7.30.30.51"
+  - name: b08-35
+    hostname: b08-35
+    role: master
+    enabled: true
+    bmc_ip: 10.23.22.82
+    bmc_address: "redfish-virtualmedia://10.23.22.82{{ idrac_redfish_system_path }}"
+    boot_mac: "BC:97:E1:7E:99:F0"
+    ip: 10.23.22.112
+    primary_interface: eno1
+    secondary_interface: eno2
+    secondary_mac: ""
+    idrac_firmware_expected: "7.30.30.51"
+  - name: b08-36
+    hostname: b08-36
+    role: worker
+    enabled: true
+    bmc_ip: 10.23.22.83
+    bmc_address: "redfish-virtualmedia://10.23.22.83{{ idrac_redfish_system_path }}"
+    boot_mac: "BC:97:E1:7E:98:D0"
+    ip: 10.23.22.113
+    primary_interface: eno1
+    secondary_interface: eno2
+    secondary_mac: ""
+    idrac_firmware_expected: "7.30.30.51"
+  - name: b09-33
+    hostname: b09-33
+    role: worker
+    enabled: true
+    bmc_ip: 10.23.22.84
+    bmc_address: "redfish-virtualmedia://10.23.22.84{{ idrac_redfish_system_path }}"
+    boot_mac: "CHANGE_ME_B09_33_BOOT_NIC_MAC"
+    ip: 10.23.22.114
+    primary_interface: eno1
+    secondary_interface: eno2
+    secondary_mac: ""
+    idrac_firmware_expected: "7.30.30.51"
+  - name: b09-34
+    hostname: b09-34
+    role: worker
+    enabled: true
+    bmc_ip: 10.23.22.85
+    bmc_address: "redfish-virtualmedia://10.23.22.85{{ idrac_redfish_system_path }}"
+    boot_mac: "CHANGE_ME_B09_34_BOOT_NIC_MAC"
+    ip: 10.23.22.115
+    primary_interface: eno1
+    secondary_interface: eno2
+    secondary_mac: ""
+    idrac_firmware_expected: "7.30.30.51"
+
+bm_dns_records:
+  - name: "api.{{ bm_cluster_name }}"
+    type: A
+    value: "{{ bm_api_vip }}"
+  - name: "api-int.{{ bm_cluster_name }}"
+    type: A
+    value: "{{ bm_api_vip }}"
+  - name: "*.apps.{{ bm_cluster_name }}"
+    type: A
+    value: "{{ bm_ingress_vip }}"
+
+# Rendered manifest locations
+acm_rendered_dir: "{{ build_root }}/acm"
+bm_rendered_dir: "{{ build_root }}/baremetal/{{ bm_cluster_name }}"

@@ -1,0 +1,92 @@
+---
+- name: Create SNO VM on vSphere and boot from Agent ISO
+  hosts: ansible_controller
+  gather_facts: false
+  tasks:
+    - name: Ensure ISO folder exists on datastore
+      community.vmware.vsphere_file:
+        hostname: "{{ vcenter_hostname }}"
+        username: "{{ vcenter_username }}"
+        password: "{{ vcenter_password }}"
+        validate_certs: "{{ validate_certs }}"
+        datacenter: "{{ vsphere_datacenter }}"
+        datastore: "{{ vsphere_datastore }}"
+        path: "{{ iso_datastore_folder }}"
+        state: directory
+      delegate_to: localhost
+
+    - name: Upload Agent ISO to datastore
+      community.vmware.vsphere_copy:
+        hostname: "{{ vcenter_hostname }}"
+        username: "{{ vcenter_username }}"
+        password: "{{ vcenter_password }}"
+        validate_certs: "{{ validate_certs }}"
+        datacenter: "{{ vsphere_datacenter }}"
+        datastore: "{{ vsphere_datastore }}"
+        src: "{{ agent_iso_local }}"
+        path: "{{ iso_datastore_path }}"
+        timeout: 1800
+      delegate_to: localhost
+
+    - name: Create or update SNO VM
+      community.vmware.vmware_guest:
+        hostname: "{{ vcenter_hostname }}"
+        username: "{{ vcenter_username }}"
+        password: "{{ vcenter_password }}"
+        validate_certs: "{{ validate_certs }}"
+        datacenter: "{{ vsphere_datacenter }}"
+        esxi_hostname: "{{ vsphere_esxi_hostname }}"
+        resource_pool: "{{ vsphere_resource_pool }}"
+        folder: "{{ vsphere_folder }}"
+        name: "{{ sno_vm_name }}"
+        state: present
+        guest_id: "{{ sno_vm_guest_id }}"
+        hardware:
+          memory_mb: "{{ sno_vm_memory_mb }}"
+          num_cpus: "{{ sno_vm_cpu }}"
+          scsi: paravirtual
+          boot_firmware: "{{ sno_vm_firmware }}"
+        disk:
+          - size_gb: "{{ sno_vm_disk_gb }}"
+            type: thin
+            datastore: "{{ vsphere_datastore }}"
+        networks:
+          - name: "{{ vm_network_eth0 }}"
+            device_type: vmxnet3
+            mac: "{{ sno_node.mac_eth0 }}"
+            start_connected: true
+          - name: "{{ vm_network_eth1 }}"
+            device_type: vmxnet3
+            mac: "{{ sno_node.mac_eth1 }}"
+            start_connected: true
+        cdrom:
+          - controller_number: 0
+            unit_number: 0
+            state: present
+            type: iso
+            iso_path: "{{ iso_vsphere_path }}"
+        wait_for_ip_address: false
+      delegate_to: localhost
+
+    - name: Set VM boot order to CDROM first
+      community.vmware.vmware_guest_boot_manager:
+        hostname: "{{ vcenter_hostname }}"
+        username: "{{ vcenter_username }}"
+        password: "{{ vcenter_password }}"
+        validate_certs: "{{ validate_certs }}"
+        name: "{{ sno_vm_name }}"
+        boot_order:
+          - cdrom
+          - disk
+        boot_delay: 5000
+      delegate_to: localhost
+
+    - name: Power on SNO VM
+      community.vmware.vmware_guest_powerstate:
+        hostname: "{{ vcenter_hostname }}"
+        username: "{{ vcenter_username }}"
+        password: "{{ vcenter_password }}"
+        validate_certs: "{{ validate_certs }}"
+        name: "{{ sno_vm_name }}"
+        state: powered-on
+      delegate_to: localhost
