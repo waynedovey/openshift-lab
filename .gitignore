@@ -1,0 +1,18 @@
+# Secrets
+inventories/**/group_vars/vault.yml
+pull-secret.txt
+*.kubeconfig
+kubeconfig
+
+# OpenShift install generated artifacts
+build/
+.openshift_install.log
+metadata.json
+auth/
+*.ign
+*.iso
+
+# Python / Ansible noise
+__pycache__/
+*.retry
+.venv/
