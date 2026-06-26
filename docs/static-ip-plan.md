@@ -5,15 +5,16 @@
 | VM NIC | Linux name | Port group | VLAN | Mode |
 |---|---|---|---|---|
 | NIC 1 | ens192 | VLAN3522 | 3522 | Access |
-| NIC 2 | ens224 | VLAN522 | 522 | Access |
 
 ## IP plan
 
 | Purpose | Address |
 |---|---|
 | SNO node | 10.23.22.90 |
-| API VIP | 10.23.22.91 |
-| Ingress VIP | 10.23.22.92 |
+| API DNS target | 10.23.22.90 |
+| Ingress DNS target | 10.23.22.90 |
+| Reserved API VIP, only for `sno_install_platform: vsphere` | 10.23.22.91 |
+| Reserved Ingress VIP, only for `sno_install_platform: vsphere` | 10.23.22.92 |
 | Gateway | 10.23.22.1 |
 | DNS | 10.23.22.100 |
 
@@ -21,9 +22,9 @@
 
 | Record | Target |
 |---|---|
-| api.hub-sno.poc.local | 10.23.22.91 |
-| api-int.hub-sno.poc.local | 10.23.22.91 |
-| *.apps.hub-sno.poc.local | 10.23.22.92 |
+| api.hub-sno.poc.local | 10.23.22.90 |
+| api-int.hub-sno.poc.local | 10.23.22.90 |
+| *.apps.hub-sno.poc.local | 10.23.22.90 |
 | hub-sno-0.hub-sno.poc.local | 10.23.22.90 |
 
 ## ACM managed bare-metal cluster IP plan
@@ -51,3 +52,7 @@
 | b09-34 | 10.23.22.85 |
 
 The iDRAC/BMC IPs are intentionally separate from the OpenShift node OS IPs.
+
+## SNO platform note
+
+The default SNO install uses `sno_install_platform: none`, so the API and apps wildcard DNS records point to the single SNO node IP. The reserved VIPs are only used if you switch to `sno_install_platform: vsphere` and provide a real `vsphere_cluster` value.

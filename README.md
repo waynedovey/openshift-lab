@@ -1,5 +1,21 @@
 # OCP SNO VMware Hub + ACM Bare-Metal Spoke - Ansible Starter
 
+## SNO networking update: one NIC only
+
+The VMware SNO hub is now configured for a single VM NIC by default. Only `vm_network_eth0` is required, and it should point at the vSphere port group that carries VLAN 3522 / the machine network. The optional secondary NIC is disabled with `sno_node.secondary_nic_enabled: false`, and `vm_network_eth1` can remain blank.
+
+```yaml
+sno_node:
+  primary_interface: ens192
+  secondary_nic_enabled: false
+
+vm_network_eth0: VLAN3522
+vm_network_eth1: ""
+```
+
+If your vCenter discovery only shows `MGMT`, and `MGMT` is actually the access network for VLAN 3522 in this lab, set `vm_network_eth0: MGMT`. Do not use `DSwitch-DVUplinks-18` for the SNO VM unless it is intentionally configured as a VM workload port group.
+
+
 This repo bootstraps a Single Node OpenShift (SNO) cluster on VMware vSphere using the OpenShift Agent-based Installer, installs Red Hat Advanced Cluster Management (ACM) on that SNO hub, then uses ACM / multicluster engine / Assisted Installer to build a managed bare-metal OpenShift cluster from Dell PowerEdge nodes.
 
 The pattern is:
@@ -7,9 +23,8 @@ The pattern is:
 1. Render `install-config.yaml` and `agent-config.yaml` from Ansible variables.
 2. Generate an OpenShift `agent.iso` that contains the static network configuration for the SNO hub.
 3. Upload the ISO to a vSphere datastore.
-4. Create a vSphere VM with two NICs:
-   - `eth0` / `ens192` on VLAN 3522 port group
-   - `eth1` / `ens224` on VLAN 522 port group
+4. Create a vSphere VM with one NIC:
+   - `eth0` / `ens192` on the VLAN 3522 machine-network port group
 5. Attach the ISO, boot the VM, and wait for the OpenShift SNO install to complete.
 6. Install ACM on the SNO hub.
 7. Configure Assisted Service storage on the hub.
@@ -49,7 +64,7 @@ See [`docs/hub-spoke-architecture.md`](docs/hub-spoke-architecture.md) for the f
 
 ## Lab assumptions
 
-These values are based on the provided pod-22 lab details and should be adjusted in `inventories/pod22/group_vars/all.yml`.
+These values are based on the provided pod-22 lab details and should be adjusted in `inventories/pod22/group_vars/all/main.yml`.
 
 | Item | Example |
 |---|---|
@@ -60,13 +75,14 @@ These values are based on the provided pod-22 lab details and should be adjusted
 | Base domain | `poc.local` |
 | Cluster name | `hub-sno` |
 | SNO node IP | `10.23.22.90` |
-| API VIP | `10.23.22.91` |
-| Ingress VIP | `10.23.22.92` |
+| API DNS target | `10.23.22.90` by default for SNO platform `none` |
+| Ingress DNS target | `10.23.22.90` by default for SNO platform `none` |
+| Reserved API VIP | `10.23.22.91`, only used if `sno_install_platform: vsphere` |
+| Reserved Ingress VIP | `10.23.22.92`, only used if `sno_install_platform: vsphere` |
 | Gateway | `10.23.22.1` |
 | Machine network | `10.23.22.0/24` |
 | DNS server | `10.23.22.100` |
 | VLAN 3522 port group | `VLAN3522` |
-| VLAN 522 port group | `VLAN522` |
 | Bare-metal cluster | `bm-spoke-01` |
 | Bare-metal API VIP | `10.23.22.120` |
 | Bare-metal Ingress VIP | `10.23.22.121` |
@@ -74,11 +90,31 @@ These values are based on the provided pod-22 lab details and should be adjusted
 DNS records expected:
 
 ```text
-api.hub-sno.poc.local       -> 10.23.22.91
-api-int.hub-sno.poc.local   -> 10.23.22.91
-*.apps.hub-sno.poc.local    -> 10.23.22.92
+api.hub-sno.poc.local       -> 10.23.22.90
+api-int.hub-sno.poc.local   -> 10.23.22.90
+*.apps.hub-sno.poc.local    -> 10.23.22.90
 hub-sno-0.hub-sno.poc.local -> 10.23.22.90
 ```
+
+
+## SNO install platform mode
+
+The default SNO install platform is:
+
+```yaml
+sno_install_platform: none
+```
+
+This is intentional for this lab. Ansible creates the VM on the standalone ESXi host through vCenter, while the OpenShift Agent ISO installs SNO with a static IP. In this mode, the hub API and apps wildcard DNS records point directly to the SNO node IP, `10.23.22.90`.
+
+The reserved `api_vip` and `ingress_vip` values are only used if you deliberately switch the install config to vSphere platform mode:
+
+```yaml
+sno_install_platform: vsphere
+vsphere_cluster: "YOUR_VCENTER_CLUSTER_NAME"
+```
+
+Do not set `sno_install_platform: vsphere` unless your vCenter inventory has a real compute cluster name and you want OpenShift to be vSphere platform-integrated. For the provided pod-22 layout, leave it as `none`.
 
 ---
 
@@ -107,7 +143,9 @@ By default the script downloads the OpenShift client and installer from the `sta
 OPENSHIFT_VERSION=4.21.0 ./scripts/bootstrap-ubuntu-24.04.sh
 ```
 
-The bootstrap installs the Ubuntu packages, creates a Python virtual environment, installs the Python module requirements, installs the Ansible Galaxy collections, and places `oc`, `kubectl`, and `openshift-install` in `/usr/local/bin`.
+The bootstrap installs the Ubuntu packages, creates a Python virtual environment, installs the Python module requirements, installs the Ansible Galaxy collections, installs or wraps `nmstatectl`, and places `oc`, `kubectl`, and `openshift-install` in `/usr/local/bin`.
+
+`nmstatectl` is required for this static-IP Agent ISO flow. The OpenShift installer validates the `networkConfig` section in `agent-config.yaml` by calling `nmstatectl` locally before it creates the ISO. If `nmstatectl` is missing, ISO generation fails before the VM is created.
 
 Validate the bastion before running the cluster automation:
 
@@ -116,6 +154,7 @@ source .venv/bin/activate
 oc version --client
 kubectl version --client
 openshift-install version
+nmstatectl --version || nmstatectl -h | head -1
 ansible --version
 ansible-galaxy collection list | egrep 'community.vmware|ansible.windows|ansible.utils'
 ```
@@ -127,16 +166,23 @@ requirements-python.txt   # Python packages installed into .venv
 requirements.yml          # Ansible Galaxy collections
 ```
 
-See [`docs/ubuntu-bastion.md`](docs/ubuntu-bastion.md) for the full Ubuntu package list, venv setup, proxy notes, and validation steps.
+See [`docs/ubuntu-bastion.md`](docs/ubuntu-bastion.md) for the full Ubuntu package list, venv setup, proxy notes, and validation steps. See [`docs/vsphere-iso-upload.md`](docs/vsphere-iso-upload.md) for the ISO upload options.
 
 ---
 
 ## Configure variables
 
+Ansible variable layout used by this repo:
+
+```text
+inventories/pod22/group_vars/all/main.yml   # normal, non-secret variables
+inventories/pod22/group_vars/all/vault.yml  # encrypted secrets only
+```
+
 Edit:
 
 ```bash
-inventories/pod22/group_vars/all.yml
+inventories/pod22/group_vars/all/main.yml
 ```
 
 Create your private vault file from the example:
@@ -151,6 +197,146 @@ ansible-vault edit inventories/pod22/group_vars/all/vault.yml
 Put your real vCenter password, pull secret, and SSH public key in the encrypted vault file.
 
 ---
+
+## Troubleshooting: `nmstatectl` missing during ISO creation
+
+If `playbooks/01_render_agent_iso.yml` fails with:
+
+```text
+failed to validate network yaml ... exec: "nmstatectl": executable file not found in $PATH
+```
+
+run the repo helper from the active virtual environment:
+
+```bash
+cd ~/OCP/ocp-sno-vsphere-ansible
+source .venv/bin/activate
+./scripts/install-nmstatectl-ubuntu.sh
+command -v nmstatectl
+nmstatectl --version || nmstatectl -h | head -1
+```
+
+On Ubuntu 24.04/Noble, an apt package named `nmstate` might not exist in the enabled repositories. The helper therefore installs Ubuntu's packaged `python3-gi` runtime, installs the `nmstate` Python package with `--no-deps`, and wraps `.venv/bin/nmstatectl` so it can import `/usr/lib/python3/dist-packages`.
+
+If you previously hit this PyGObject error:
+
+```text
+Dependency 'girepository-2.0' is required but not found
+```
+
+do not keep retrying `pip install nmstate==2.0.0` normally. That causes pip to build the newest PyGObject from PyPI. Use the helper instead.
+
+Then rerun:
+
+```bash
+ansible-playbook -i inventories/pod22/hosts.yml playbooks/01_render_agent_iso.yml --ask-vault-pass
+```
+
+---
+
+
+## Troubleshooting: vCenter datastore folder creation returns 404
+
+If `playbooks/02_create_vsphere_vm.yml` fails while creating the ISO folder with an error like:
+
+```text
+Failed to create temporary file
+url: https://<vcenter>/folder/iso/foobar.tmp?dsName=datastore1&dcPath=Datacenter
+status: 404
+reason: Not Found
+```
+
+use the default ESXi SSH/SCP upload mode instead of the vCenter datastore HTTP API. This repo now defaults to:
+
+```yaml
+iso_upload_method: esxi_ssh
+esxi_hostname: "{{ vsphere_esxi_hostname }}"
+esxi_username: root
+esxi_password: "{{ vault_esxi_password }}"
+esxi_datastore_mount: "/vmfs/volumes/{{ vsphere_datastore }}"
+```
+
+Add the ESXi root password to your encrypted vault file:
+
+```bash
+ansible-vault edit inventories/pod22/group_vars/all/vault.yml
+```
+
+Example vault entry:
+
+```yaml
+vault_esxi_password: "CHANGE_ME"
+```
+
+Make sure SSH is enabled on the ESXi host, then rerun:
+
+```bash
+ansible-playbook -i inventories/pod22/hosts.yml playbooks/02_create_vsphere_vm.yml --ask-vault-pass
+```
+
+The ISO will be copied directly to the ESXi datastore path, for example:
+
+```text
+/vmfs/volumes/datastore1/iso/ocp/hub-sno-agent.x86_64.iso
+```
+
+The VM still references it through vCenter as:
+
+```text
+[datastore1] iso/ocp/hub-sno-agent.x86_64.iso
+```
+
+To force the old vCenter API upload method, set:
+
+```yaml
+iso_upload_method: vcenter_api
+```
+
+---
+
+
+## Important fix in this package: single-NIC SNO + disk.EnableUUID
+
+This package has the VMware SNO hub fixed for your current design:
+
+```yaml
+sno_node:
+  primary_interface: ens192
+  secondary_nic_enabled: false
+  mac_eth1: ""
+  secondary_interface: ""
+
+vm_network_eth0: VLAN3522
+vm_network_eth1: ""
+
+sno_vm_disk_enable_uuid: true
+sno_vm_poweroff_before_configure: true
+sno_vm_recreate: false
+```
+
+The SNO VM has one NIC only. It does not require VLAN522. The VM creation playbook also enforces the required vSphere advanced setting:
+
+```text
+disk.EnableUUID = TRUE
+```
+
+If you already generated an ISO before this fix, remove the old build directory and regenerate the ISO so the embedded AgentConfig no longer includes `ens224`:
+
+```bash
+cd ~/OCP/ocp-sno-vsphere-ansible
+source .venv/bin/activate
+rm -rf build/hub-sno
+ansible-playbook -i inventories/pod22/hosts.yml playbooks/01_render_agent_iso.yml --ask-vault-pass
+ansible-playbook -i inventories/pod22/hosts.yml playbooks/02_create_vsphere_vm.yml --ask-vault-pass
+```
+
+If you want the playbook to delete and recreate the existing `hub-sno` VM, temporarily set this in `inventories/pod22/group_vars/all/main.yml`:
+
+```yaml
+sno_vm_recreate: true
+```
+
+Set it back to `false` after the clean VM has been created.
 
 ## Run the SNO hub build
 
@@ -201,7 +387,7 @@ oc get packagemanifest advanced-cluster-management -n openshift-marketplace \
 First, confirm the missing boot MACs for `b09-33` and `b09-34` in:
 
 ```bash
-inventories/pod22/group_vars/all.yml
+inventories/pod22/group_vars/all/main.yml
 ```
 
 Then run:
@@ -232,9 +418,9 @@ ansible-playbook -i inventories/pod22/hosts.yml playbooks/04_configure_ad_dns.ym
 If WinRM is not enabled, create these records manually in AD DNS:
 
 ```powershell
-Add-DnsServerResourceRecordA -ZoneName "poc.local" -Name "api.hub-sno" -IPv4Address "10.23.22.91"
-Add-DnsServerResourceRecordA -ZoneName "poc.local" -Name "api-int.hub-sno" -IPv4Address "10.23.22.91"
-Add-DnsServerResourceRecordA -ZoneName "poc.local" -Name "*.apps.hub-sno" -IPv4Address "10.23.22.92"
+Add-DnsServerResourceRecordA -ZoneName "poc.local" -Name "api.hub-sno" -IPv4Address "10.23.22.90"
+Add-DnsServerResourceRecordA -ZoneName "poc.local" -Name "api-int.hub-sno" -IPv4Address "10.23.22.90"
+Add-DnsServerResourceRecordA -ZoneName "poc.local" -Name "*.apps.hub-sno" -IPv4Address "10.23.22.90"
 Add-DnsServerResourceRecordA -ZoneName "poc.local" -Name "hub-sno-0.hub-sno" -IPv4Address "10.23.22.90"
 ```
 
@@ -308,10 +494,10 @@ https://console-openshift-console.apps.hub-sno.poc.local
 - DHCP is not used. Static IP is embedded in `agent-config.yaml`.
 - The SNO VM NIC MAC addresses must match the MAC addresses in `agent-config.yaml`.
 - The VMware port group backing `eth0` must be an access port group for VLAN 3522.
-- The VMware port group backing `eth1` must be an access port group for VLAN 522.
-- `apiVIPs` and `ingressVIPs` must be in the machine network.
+- With the default `sno_install_platform: none`, `apiVIPs` and `ingressVIPs` are not rendered into `install-config.yaml`; API and apps DNS point to the SNO node IP.
+- If you switch to `sno_install_platform: vsphere`, `apiVIPs`, `ingressVIPs`, and `vsphere_cluster` must be valid for your vCenter inventory.
 - The VMware playbook defaults to the standalone ESXi host at `10.23.22.11`; if your vCenter inventory uses a cluster, edit `02_create_vsphere_vm.yml` to use `cluster` instead of `esxi_hostname`.
-- Use a separate API VIP and Ingress VIP. Do not reuse the node IP unless you have validated that specific design.
+- For this SNO hub lab, reusing the SNO node IP for API and apps DNS is expected in platform `none` mode.
 - `.local` can conflict with mDNS in some environments. It is okay for a controlled lab, but a normal DNS zone is cleaner.
 - The ACM bare-metal flow assumes Redfish virtual media because DHCP and a provisioning network are not being used.
 - The b09-33 and b09-34 boot NIC MAC addresses are placeholders and must be filled in before running `08_apply_baremetal_cluster.yml`.
@@ -364,8 +550,8 @@ The fixed preflight uses explicit boolean comparisons:
 
 ```yaml
 - "(sno_node.ip | ansible.utils.ipaddr(machine_cidr)) != false"
-- "(api_vip | ansible.utils.ipaddr(machine_cidr)) != false"
-- "(ingress_vip | ansible.utils.ipaddr(machine_cidr)) != false"
+- "(sno_api_ip | ansible.utils.ipaddr(machine_cidr)) != false"
+- "(sno_ingress_ip | ansible.utils.ipaddr(machine_cidr)) != false"
 ```
 
 Then rerun:
@@ -413,4 +599,176 @@ It should return:
 ```text
 true
 ```
+
+
+
+## Troubleshooting: `vsphere_cluster is undefined` during ISO render
+
+Older versions of this starter always rendered a vSphere platform block in `install-config.yaml`, which required this variable:
+
+```yaml
+vsphere_cluster: "..."
+```
+
+That is not ideal for the provided pod-22 lab because the VM is being created by Ansible on a standalone ESXi host through vCenter. The current default is now:
+
+```yaml
+sno_install_platform: none
+```
+
+With that setting, the rendered `install-config.yaml` contains:
+
+```yaml
+platform:
+  none: {}
+```
+
+and no longer needs `vsphere_cluster`. If you really want a vSphere-integrated install, set `sno_install_platform: vsphere` and provide a real vCenter compute cluster name in `vsphere_cluster`.
+
+
+### Ubuntu 24.04 nmstatectl note
+
+Ubuntu 24.04 may not have a native `nmstate` package. The repo helper therefore installs a local `nmstatectl` shim for the simple static Ethernet SNO config generated by this lab:
+
+```bash
+./scripts/install-nmstatectl-ubuntu.sh
+command -v nmstatectl
+nmstatectl --version
+```
+
+Set `USE_NMSTATECTL_AGENT_SHIM=false` if you want the helper to fail instead of installing the shim. For complex NMState configs such as bonds, VLANs, or bridges, use a RHEL/Rocky bastion and install the real package with `dnf install nmstate`.
+
+
+## vSphere datastore ISO folder troubleshooting
+
+If `playbooks/02_create_vsphere_vm.yml` fails with a message similar to:
+
+```text
+Failed to create temporary file
+url: https://<vcenter>/folder/iso/ocp/foobar.tmp?dsName=datastore1&dcPath=Datacenter
+status: 404
+reason: Not Found
+```
+
+then the datastore browser cannot find or create the target folder path. The playbook now creates the folder path one level at a time, for example `iso` first and then `iso/ocp`.
+
+First confirm the datastore and datacenter names match the vCenter inventory exactly:
+
+```bash
+ansible-playbook -i inventories/pod22/hosts.yml playbooks/00_preflight.yml --ask-vault-pass
+```
+
+If folder creation is still blocked, upload the ISO to the datastore root by changing:
+
+```yaml
+iso_datastore_folder: ""
+```
+
+Then rerun:
+
+```bash
+ansible-playbook -i inventories/pod22/hosts.yml playbooks/02_create_vsphere_vm.yml --ask-vault-pass
+```
+
+When using the datastore root fallback, the VM CD-ROM path becomes:
+
+```text
+[datastore1] hub-sno-agent.x86_64.iso
+```
+
+## Troubleshooting: `No datacenter named Datacenter was found`
+
+If `playbooks/02_create_vsphere_vm.yml` fails at VM creation with:
+
+```text
+No datacenter named Datacenter was found
+```
+
+then the placeholder value in `inventories/pod22/group_vars/all/main.yml` does not match the exact vCenter inventory name.
+
+Run the discovery playbook:
+
+```bash
+ansible-playbook -i inventories/pod22/hosts.yml playbooks/00_discover_vsphere_inventory.yml --ask-vault-pass
+```
+
+Then update these values exactly as shown by vCenter:
+
+```yaml
+vsphere_datacenter: "<exact datacenter name>"
+vsphere_folder: "/{{ vsphere_datacenter }}/vm"
+vsphere_esxi_hostname: "<exact host name from vCenter, often an FQDN rather than an IP>"
+vsphere_datastore: "<exact datastore name>"
+vm_network_eth0: "<exact port group for VLAN 3522>"
+vm_network_eth1: ""  # not used unless secondary_nic_enabled is true
+```
+
+The playbooks now include early vSphere inventory validation so the error shows the available datacenter names before it reaches the VM creation task.
+## SNO hub networking: one NIC only
+
+The VMware SNO hub uses one vSphere NIC by default:
+
+```text
+hub-sno ens192 -> vm_network_eth0 -> VLAN3522 / machine network
+```
+
+`vm_network_eth1` is intentionally blank and `sno_node.secondary_nic_enabled` is `false`.
+
+Discovery must show the primary port group before VM creation succeeds:
+
+```bash
+ansible-playbook -i inventories/pod22/hosts.yml playbooks/00_discover_vsphere_inventory.yml --ask-vault-pass
+```
+
+If discovery only shows `MGMT` and `DSwitch-DVUplinks-18`, either set `vm_network_eth0: MGMT` if MGMT is already backed by VLAN 3522, or create a dedicated port group:
+
+```yaml
+vm_network_eth0: VLAN3522
+vm_network_eth1: ""
+esxi_vswitch_name: vSwitch0
+sno_primary_portgroup_vlan_id: 0
+```
+
+Use `sno_primary_portgroup_vlan_id: 0` when the ESXi physical switchport is an access port on VLAN 3522. Use `3522` only when the ESXi uplink is trunked and tagging VLAN 3522 is required on the port group.
+
+To create/validate the standard vSwitch port group over ESXi SSH:
+
+```bash
+ansible-playbook -i inventories/pod22/hosts.yml playbooks/00_create_sno_primary_portgroup.yml --ask-vault-pass
+ansible-playbook -i inventories/pod22/hosts.yml playbooks/00_discover_vsphere_inventory.yml --ask-vault-pass
+ansible-playbook -i inventories/pod22/hosts.yml playbooks/02_create_vsphere_vm.yml --ask-vault-pass
+```
+
+
+## Troubleshooting a stalled Agent install wait
+
+`playbooks/03_wait_install.yml` runs `openshift-install agent wait-for bootstrap-complete` and then `install-complete`. These commands can look quiet in Ansible because output is buffered. If it appears stalled, interrupt only the waiter with `Ctrl+C`; the OpenShift installation continues on the VM.
+
+Run the diagnostic playbook:
+
+```bash
+ansible-playbook -i inventories/pod22/hosts.yml playbooks/03_check_install_status.yml --ask-vault-pass
+```
+
+It checks VM power state, DNS resolution, ping to the SNO static IP, ports 22/6443/22623, the installer log, and basic RHCOS/agent journal snippets over SSH.
+
+For the SNO hub using `platform: none`, make sure these DNS records resolve to the SNO node IP:
+
+```text
+api.<cluster>.<base-domain>       -> SNO node IP
+api-int.<cluster>.<base-domain>   -> SNO node IP
+*.apps.<cluster>.<base-domain>    -> SNO node IP
+```
+
+
+
+### ESXi SCP upload fails on Ubuntu 24.04
+
+Ubuntu 24.04 uses a newer OpenSSH `scp` that defaults to SFTP mode. Many ESXi hosts do not provide an SFTP subsystem, so a plain `scp` can fail even when SSH and `mkdir` work. The playbook therefore uses `scp -O` to force the legacy SCP protocol:
+
+```bash
+scp -O local.iso root@10.23.22.11:/vmfs/volumes/datastore1/iso/ocp/
+```
+
+The ESXi upload tasks are intentionally not hidden by default (`esxi_upload_no_log: false`) so failures show useful stderr. The password is passed via `SSHPASS` environment variable and is not present in the command line.
 

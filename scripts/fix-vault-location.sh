@@ -2,35 +2,45 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-OLD="$ROOT_DIR/inventories/pod22/group_vars/vault.yml"
-NEW_DIR="$ROOT_DIR/inventories/pod22/group_vars/all"
-NEW="$NEW_DIR/vault.yml"
-EXAMPLE="$NEW_DIR/vault.yml.example"
+GROUP_VARS_DIR="$ROOT_DIR/inventories/pod22/group_vars"
+ALL_DIR="$GROUP_VARS_DIR/all"
+OLD_MAIN="$GROUP_VARS_DIR/all.yml"
+NEW_MAIN="$ALL_DIR/main.yml"
+OLD_VAULT="$GROUP_VARS_DIR/vault.yml"
+NEW_VAULT="$ALL_DIR/vault.yml"
+EXAMPLE="$ALL_DIR/vault.yml.example"
 
-mkdir -p "$NEW_DIR"
+mkdir -p "$ALL_DIR"
 
-if [[ -f "$NEW" ]]; then
-  echo "Vault already exists at the correct path: $NEW"
-  exit 0
+if [[ -f "$OLD_MAIN" && ! -f "$NEW_MAIN" ]]; then
+  mv "$OLD_MAIN" "$NEW_MAIN"
+  echo "Moved non-secret vars to: $NEW_MAIN"
+elif [[ -f "$NEW_MAIN" ]]; then
+  echo "Non-secret vars already exist at: $NEW_MAIN"
+else
+  echo "WARNING: Could not find non-secret vars at either:"
+  echo "  $OLD_MAIN"
+  echo "  $NEW_MAIN"
 fi
 
-if [[ -f "$OLD" ]]; then
-  mv "$OLD" "$NEW"
-  echo "Moved vault file to: $NEW"
-  echo "Rerun your playbook with --ask-vault-pass."
-  exit 0
-fi
-
-if [[ -f "$EXAMPLE" ]]; then
-  cp "$EXAMPLE" "$NEW"
-  echo "Created vault file from example: $NEW"
+if [[ -f "$NEW_VAULT" ]]; then
+  echo "Vault already exists at: $NEW_VAULT"
+elif [[ -f "$OLD_VAULT" ]]; then
+  mv "$OLD_VAULT" "$NEW_VAULT"
+  echo "Moved vault file to: $NEW_VAULT"
+elif [[ -f "$EXAMPLE" ]]; then
+  cp "$EXAMPLE" "$NEW_VAULT"
+  echo "Created vault file from example: $NEW_VAULT"
   echo "Now edit/encrypt it:"
-  echo "  ansible-vault encrypt $NEW"
-  echo "  ansible-vault edit $NEW"
-  exit 0
+  echo "  ansible-vault encrypt $NEW_VAULT"
+  echo "  ansible-vault edit $NEW_VAULT"
+else
+  echo "WARNING: Could not find old vault or example file. Expected one of:"
+  echo "  $OLD_VAULT"
+  echo "  $EXAMPLE"
 fi
 
-echo "Could not find old vault or example file. Expected one of:"
-echo "  $OLD"
-echo "  $EXAMPLE"
-exit 1
+echo
+echo "Validate Ansible can see both normal vars and vault vars:"
+echo "  ansible-inventory -i inventories/pod22/hosts.yml --list --ask-vault-pass \\\"
+echo "    | jq '._meta.hostvars.localhost | {cluster_name, has_vcenter_password: has(\"vault_vcenter_password\")}'"

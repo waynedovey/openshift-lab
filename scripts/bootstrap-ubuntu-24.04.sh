@@ -40,17 +40,12 @@ sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
   python3-full \
   python3-pip \
   python3-venv \
+  software-properties-common \
   sshpass \
   tar \
   unzip \
   wget \
   xz-utils
-
-# nmstatectl is useful for validating NMState snippets, but it is not required to run the installer.
-# Some Ubuntu mirrors may not expose it by default, so do not fail the whole bootstrap if unavailable.
-if apt-cache show nmstate >/dev/null 2>&1; then
-  sudo DEBIAN_FRONTEND=noninteractive apt-get install -y nmstate || true
-fi
 
 cd "${REPO_ROOT}"
 python3 -m venv .venv
@@ -59,6 +54,11 @@ source .venv/bin/activate
 python -m pip install --upgrade pip wheel setuptools
 python -m pip install -r requirements-python.txt
 ansible-galaxy collection install -r requirements.yml
+
+# The OpenShift Agent-based Installer calls nmstatectl locally when static
+# networking is present in agent-config.yaml. Ubuntu 24.04 images do not always
+# have a native apt nmstate package, so use the helper with a pip fallback.
+./scripts/install-nmstatectl-ubuntu.sh
 
 tmpdir="$(mktemp -d)"
 trap 'rm -rf "${tmpdir}"' EXIT

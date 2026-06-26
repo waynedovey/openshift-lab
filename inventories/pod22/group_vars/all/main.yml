@@ -10,6 +10,15 @@ cluster_fqdn: "{{ cluster_name }}.{{ base_domain }}"
 # ---------------------------------------------------------------------------
 # Static IP plan
 # ---------------------------------------------------------------------------
+# Default is platform none because Ansible creates the SNO VM on vSphere.
+# This avoids requiring a vSphere compute cluster name in install-config.yaml,
+# which is important in this lab because the provided inventory is a standalone
+# ESXi host managed by vCenter.
+#
+# For a production vSphere-integrated OpenShift install, change to "vsphere"
+# and fill in vsphere_cluster below.
+sno_install_platform: none
+
 machine_cidr: 10.23.22.0/24
 machine_cidr_prefix: 24
 gateway: 10.23.22.1
@@ -23,12 +32,20 @@ sno_node:
   # These are VMware VM NIC MACs, not iDRAC MACs.
   # Keep them unique and make sure vCenter accepts the chosen static MAC range.
   mac_eth0: "00:50:56:23:22:90"
-  mac_eth1: "00:50:56:23:22:91"
   primary_interface: ens192
-  secondary_interface: ens224
 
+  # Secondary NIC is disabled by default for the SNO hub.
+  # Do not configure VLAN522 for the SNO VM. The hub only needs VLAN3522.
+  secondary_nic_enabled: false
+  mac_eth1: ""
+  secondary_interface: ""
+
+# VIPs are only used when sno_install_platform is "vsphere".
+# With platform none/SNO, DNS should point api/api-int/apps to the SNO node IP.
 api_vip: 10.23.22.91
 ingress_vip: 10.23.22.92
+sno_api_ip: "{{ sno_node.ip if sno_install_platform == 'none' else api_vip }}"
+sno_ingress_ip: "{{ sno_node.ip if sno_install_platform == 'none' else ingress_vip }}"
 
 # OpenShift internal networks
 cluster_network_cidr: 10.128.0.0/14
@@ -45,17 +62,30 @@ vcenter_password: "{{ vault_vcenter_password }}"
 validate_certs: false
 
 # Change these to match vCenter inventory names.
-# This starter uses the standalone ESXi host through vCenter because the provided lab lists b08-31 as the ESXi host.
-# If your host is inside a vSphere cluster, swap the vmware_guest task to use cluster instead of esxi_hostname.
-vsphere_datacenter: Datacenter
+# This starter creates the VM on the standalone ESXi host through vCenter.
+vsphere_datacenter: Westpac
 vsphere_esxi_hostname: 10.23.22.11
 vsphere_resource_pool: Resources
-vsphere_folder: /Datacenter/vm
+vsphere_folder: "/{{ vsphere_datacenter }}/vm"
 vsphere_datastore: datastore1
 
-# Port groups. These must map to access VLANs on the ESXi/vSwitch side.
+# Only required when sno_install_platform: vsphere.
+# Leave unset/empty when using the default platform none mode.
+vsphere_cluster: ""
+
+# Port group for the SNO VM machine network. This must map to VLAN 3522 on the ESXi/vSwitch side.
+# If discovery only shows MGMT and MGMT is already on VLAN 3522, set this to MGMT instead.
 vm_network_eth0: VLAN3522
-vm_network_eth1: VLAN522
+
+# Optional secondary NIC. Disabled by default because the SNO hub only needs VLAN 3522.
+# Leave blank unless sno_node.secondary_nic_enabled is set to true.
+vm_network_eth1: ""
+
+# Optional helper playbook 00_create_sno_primary_portgroup.yml uses these values.
+# Use VLAN ID 0 when the ESXi physical uplink switchport is ACCESS VLAN 3522.
+# Use VLAN ID 3522 only when the ESXi uplink is a TRUNK carrying VLAN 3522.
+esxi_vswitch_name: vSwitch0
+sno_primary_portgroup_vlan_id: 0
 
 # SNO VM sizing. Increase disk for ACM / hub workloads if needed.
 sno_vm_name: hub-sno
@@ -64,12 +94,44 @@ sno_vm_memory_mb: 65536
 sno_vm_disk_gb: 250
 sno_vm_guest_id: rhel9_64Guest
 sno_vm_firmware: efi
+# Required for OpenShift/RHCOS on vSphere so disks are mounted and identified correctly.
+sno_vm_disk_enable_uuid: true
+# Power off before configure so CD-ROM, boot order, and disk.EnableUUID apply cleanly.
+sno_vm_poweroff_before_configure: true
+# Set true only when you want the playbook to delete/recreate the SNO VM for a clean install.
+sno_vm_recreate: false
 
 # Datastore path where the generated agent ISO will be uploaded.
+# Default upload method is esxi_ssh because some lab vCenter datastore HTTP APIs
+# return 404 when community.vmware.vsphere_file tries to create new folders.
+# The VM still attaches the ISO through vCenter using iso_vsphere_path.
+#
+# Supported values:
+#   esxi_ssh    - create folders/upload ISO through SSH/SCP to the ESXi datastore path
+#   vcenter_api - use community.vmware.vsphere_file/vsphere_copy through vCenter
+iso_upload_method: esxi_ssh
+
+# ESXi SSH/SCP upload settings. Make sure SSH is enabled on the ESXi host.
+esxi_hostname: "{{ vsphere_esxi_hostname }}"
+esxi_username: root
+esxi_password: "{{ vault_esxi_password }}"
+esxi_datastore_mount: "/vmfs/volumes/{{ vsphere_datastore }}"
+
+# Set true only if you need to hide all ESXi SSH/SCP task output. Default false so upload failures show useful stderr.
+esxi_upload_no_log: false
+
+
+# Use a unique ISO filename for each playbook run so ESXi does not fail with
+# "Device or resource busy" when the previous ISO is still mounted by a VM.
+iso_unique_per_upload: true
+
+# Leave iso_datastore_folder empty ("") to upload to the datastore root.
 iso_datastore_folder: iso/ocp
 iso_datastore_name: "{{ cluster_name }}-agent.x86_64.iso"
-iso_datastore_path: "{{ iso_datastore_folder }}/{{ iso_datastore_name }}"
+iso_datastore_path: "{{ ((iso_datastore_folder | default('') | trim('/')) ~ '/') if ((iso_datastore_folder | default('') | trim('/')) | length > 0) else '' }}{{ iso_datastore_name }}"
 iso_vsphere_path: "[{{ vsphere_datastore }}] {{ iso_datastore_path }}"
+esxi_iso_dir: "{{ esxi_datastore_mount }}{{ '/' ~ (iso_datastore_folder | trim('/')) if (iso_datastore_folder | default('') | trim('/') | length > 0) else '' }}"
+esxi_iso_path: "{{ esxi_datastore_mount }}/{{ iso_datastore_path }}"
 
 # ---------------------------------------------------------------------------
 # Build paths on the Ansible controller
@@ -91,13 +153,13 @@ ad_dns_zone: poc.local
 ad_dns_records:
   - name: "api.{{ cluster_name }}"
     type: A
-    value: "{{ api_vip }}"
+    value: "{{ sno_api_ip }}"
   - name: "api-int.{{ cluster_name }}"
     type: A
-    value: "{{ api_vip }}"
+    value: "{{ sno_api_ip }}"
   - name: "*.apps.{{ cluster_name }}"
     type: A
-    value: "{{ ingress_vip }}"
+    value: "{{ sno_ingress_ip }}"
   - name: "{{ sno_node.hostname }}.{{ cluster_name }}"
     type: A
     value: "{{ sno_node.ip }}"

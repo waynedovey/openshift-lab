@@ -5,13 +5,33 @@
   tasks:
     - name: Show installer wait command
       ansible.builtin.debug:
-        msg: "Waiting for install completion using {{ install_dir }}"
+        msg:
+          - "Install dir: {{ install_dir }}"
+          - "SNO IP: {{ sno_node.ip }}"
+          - "This command can sit for a long time. Use playbooks/03_check_install_status.yml in another terminal for live checks."
+          - "Manual debug command: openshift-install agent wait-for bootstrap-complete --dir={{ install_dir }} --log-level=debug"
+
+    - name: Show latest installer log lines before waiting
+      ansible.builtin.shell: |
+        if [ -f "{{ install_dir }}/.openshift_install.log" ]; then
+          tail -n 80 "{{ install_dir }}/.openshift_install.log"
+        else
+          echo "No installer log yet."
+        fi
+      args:
+        executable: /bin/bash
+      changed_when: false
+      register: installer_log_before
+
+    - name: Print latest installer log lines
+      ansible.builtin.debug:
+        var: installer_log_before.stdout_lines
 
     - name: Wait for bootstrap to complete
       ansible.builtin.command: >-
         openshift-install agent wait-for bootstrap-complete
         --dir={{ install_dir }}
-        --log-level=info
+        --log-level=debug
       register: bootstrap_wait
       changed_when: false
 
@@ -19,7 +39,7 @@
       ansible.builtin.command: >-
         openshift-install agent wait-for install-complete
         --dir={{ install_dir }}
-        --log-level=info
+        --log-level=debug
       register: install_wait
       changed_when: false
 

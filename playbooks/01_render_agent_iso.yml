@@ -52,6 +52,9 @@
         openshift-install agent create image
         --dir={{ install_dir }}
         --log-level=info
+      environment:
+        PATH: "{{ playbook_dir }}/../.venv/bin:{{ ansible_env.PATH }}:/usr/local/sbin:/usr/sbin:/sbin"
+        PYTHONPATH: "/usr/lib/python3/dist-packages:{{ ansible_env.PYTHONPATH | default('') }}"
       args:
         creates: "{{ agent_iso_local }}"
 

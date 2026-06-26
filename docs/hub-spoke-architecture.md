@@ -11,7 +11,7 @@ Build a small automated pod where:
 ## Flow
 
 ```text
-RHEL Ansible Controller
+Ubuntu 24.04 Ansible Controller
         |
         | 1. Render install-config.yaml + agent-config.yaml
         | 2. Create OpenShift Agent ISO with static networking
@@ -38,8 +38,10 @@ Managed bare-metal OpenShift cluster
 | Purpose | Address |
 |---|---:|
 | SNO hub node | 10.23.22.90 |
-| SNO API VIP | 10.23.22.91 |
-| SNO Ingress VIP | 10.23.22.92 |
+| SNO API DNS target | 10.23.22.90 |
+| SNO Ingress DNS target | 10.23.22.90 |
+| SNO reserved API VIP, vSphere platform mode only | 10.23.22.91 |
+| SNO reserved Ingress VIP, vSphere platform mode only | 10.23.22.92 |
 | Bare-metal API VIP | 10.23.22.120 |
 | Bare-metal Ingress VIP | 10.23.22.121 |
 | Bare-metal node b08-33 | 10.23.22.110 |
@@ -65,7 +67,7 @@ Managed bare-metal OpenShift cluster
 ## Important notes
 
 - The BMC/iDRAC IPs are not the OpenShift node IPs.
-- DHCP is disabled, so each host gets a static IP through `NMStateConfig`.
+- DHCP is disabled, so the hub gets a static IP through `agent-config.yaml`, and each bare-metal host gets a static IP through `NMStateConfig`.
 - The `boot_mac` must be the NIC MAC on the network used to reach the cluster machine network, currently VLAN 3522.
 - Because there is no provisioning network, the BareMetalHost uses `redfish-virtualmedia://`.
 - The iDRAC firmware versions should be aligned before the ACM provisioning run.
@@ -83,3 +85,7 @@ bm_worker_count: 0
 ```
 
 The first three nodes remain `role: master`. Assisted Installer will create a compact cluster where the control-plane nodes are schedulable.
+
+## SNO platform note
+
+The hub VM is created by Ansible on vSphere, but OpenShift is installed with `platform: none` by default. That keeps the lab independent of a vSphere compute-cluster name and matches the standalone ESXi inventory in pod-22.

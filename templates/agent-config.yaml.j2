@@ -9,8 +9,10 @@ hosts:
     interfaces:
       - name: {{ sno_node.primary_interface }}
         macAddress: {{ sno_node.mac_eth0 }}
+{% if sno_node.secondary_nic_enabled | default(false) | bool %}
       - name: {{ sno_node.secondary_interface }}
         macAddress: {{ sno_node.mac_eth1 }}
+{% endif %}
     networkConfig:
       interfaces:
         - name: {{ sno_node.primary_interface }}
@@ -25,6 +27,7 @@ hosts:
                 prefix-length: {{ machine_cidr_prefix }}
           ipv6:
             enabled: false
+{% if sno_node.secondary_nic_enabled | default(false) | bool %}
         - name: {{ sno_node.secondary_interface }}
           type: ethernet
           state: up
@@ -34,6 +37,7 @@ hosts:
             dhcp: false
           ipv6:
             enabled: false
+{% endif %}
       dns-resolver:
         config:
           server:
