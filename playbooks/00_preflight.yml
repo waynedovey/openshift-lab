@@ -77,9 +77,12 @@
     - name: Validate static IPs are in the machine CIDR
       ansible.builtin.assert:
         that:
-          - sno_node.ip | ansible.utils.ipaddr(machine_cidr)
-          - api_vip | ansible.utils.ipaddr(machine_cidr)
-          - ingress_vip | ansible.utils.ipaddr(machine_cidr)
+          # ansible.utils.ipaddr returns the matching IP value when true.
+          # Newer ansible-core requires assert conditionals to resolve to a real boolean,
+          # so compare the filter result explicitly instead of using the returned string directly.
+          - "(sno_node.ip | ansible.utils.ipaddr(machine_cidr)) != false"
+          - "(api_vip | ansible.utils.ipaddr(machine_cidr)) != false"
+          - "(ingress_vip | ansible.utils.ipaddr(machine_cidr)) != false"
         fail_msg: "SNO node IP, API VIP, and Ingress VIP must be inside {{ machine_cidr }}."
 
     - name: Check vCenter API is reachable

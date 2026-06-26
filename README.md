@@ -349,3 +349,27 @@ ansible-config dump --only-changed | egrep 'DEFAULT_STDOUT_CALLBACK|CALLBACK_RES
 ```
 
 You should see the repo-local `ansible.cfg` and the built-in default callback.
+
+## Troubleshooting: `ipaddr` conditional must be boolean
+
+If preflight fails with this message:
+
+```text
+Conditional result (True) was derived from value of type 'str'. Conditionals must have a boolean result.
+```
+
+The issue is caused by using the return value from `ansible.utils.ipaddr` directly in an `assert`. The filter returns the matching IP string when the address is valid, but newer Ansible versions require conditionals to evaluate to a real boolean.
+
+The fixed preflight uses explicit boolean comparisons:
+
+```yaml
+- "(sno_node.ip | ansible.utils.ipaddr(machine_cidr)) != false"
+- "(api_vip | ansible.utils.ipaddr(machine_cidr)) != false"
+- "(ingress_vip | ansible.utils.ipaddr(machine_cidr)) != false"
+```
+
+Then rerun:
+
+```bash
+ansible-playbook -i inventories/pod22/hosts.yml playbooks/00_preflight.yml --ask-vault-pass
+```
