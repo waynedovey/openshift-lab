@@ -317,3 +317,35 @@ https://console-openshift-console.apps.hub-sno.poc.local
 - The b09-33 and b09-34 boot NIC MAC addresses are placeholders and must be filled in before running `08_apply_baremetal_cluster.yml`.
 - The starter enforces iDRAC firmware consistency and currently expects `7.30.30.51`. Update `idrac_firmware_expected` if you standardise on a different version.
 
+
+
+## Troubleshooting: `community.general.yaml` callback removed
+
+If you see this error on Ubuntu 24.04 after installing the latest Ansible collections:
+
+```text
+[ERROR]: The 'community.general.yaml' callback plugin has been removed.
+```
+
+Use the updated `ansible.cfg` included in this repo. The old setting was:
+
+```ini
+stdout_callback = yaml
+```
+
+The new supported setting is:
+
+```ini
+stdout_callback = ansible.builtin.default
+callback_result_format = yaml
+```
+
+This keeps readable YAML-like playbook output without depending on the removed `community.general.yaml` callback plugin.
+
+To verify what Ansible is actually loading:
+
+```bash
+ansible-config dump --only-changed | egrep 'DEFAULT_STDOUT_CALLBACK|CALLBACK_RESULT_FORMAT|CONFIG_FILE'
+```
+
+You should see the repo-local `ansible.cfg` and the built-in default callback.

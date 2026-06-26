@@ -95,3 +95,23 @@ ansible-playbook -i inventories/pod22/hosts.yml playbooks/00_preflight.yml --ask
 - Keep `inventories/pod22/group_vars/vault.yml` encrypted with Ansible Vault.
 - Do not commit `.venv/`, generated ISOs, kubeconfigs, pull secrets, or the `build/` directory.
 - If the Ubuntu VM uses a proxy, export `HTTP_PROXY`, `HTTPS_PROXY`, and `NO_PROXY` before running the bootstrap and playbooks. Include `10.23.22.0/24`, `.poc.local`, vCenter, iDRACs, and the OpenShift API VIPs in `NO_PROXY`.
+
+
+## Ansible callback compatibility
+
+Ubuntu 24.04 will normally install a recent Ansible version and the latest `community.general` collection. In `community.general` 12.0.0 and later, the old YAML callback plugin is removed.
+
+The repo therefore uses this in `ansible.cfg`:
+
+```ini
+stdout_callback = ansible.builtin.default
+callback_result_format = yaml
+```
+
+Do not set this anymore:
+
+```ini
+stdout_callback = yaml
+```
+
+That older setting can resolve to `community.general.yaml` and fail before the playbook starts.
