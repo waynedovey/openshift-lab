@@ -772,3 +772,19 @@ scp -O local.iso root@10.23.22.11:/vmfs/volumes/datastore1/iso/ocp/
 
 The ESXi upload tasks are intentionally not hidden by default (`esxi_upload_no_log: false`) so failures show useful stderr. The password is passed via `SSHPASS` environment variable and is not present in the command line.
 
+
+## SNO primary port group auto-create
+
+The VMware SNO hub uses one NIC only. By default, `vm_network_eth0` is `VLAN3522` and `vm_network_eth1` is blank. If vCenter does not already show `VLAN3522` as a VM port group, `playbooks/02_create_vsphere_vm.yml` will now try to create it on the ESXi host using SSH before VM creation.
+
+Defaults:
+
+```yaml
+vm_network_eth0: VLAN3522
+vm_network_eth1: ""
+esxi_vswitch_name: vSwitch0
+sno_primary_portgroup_vlan_id: 0
+sno_primary_portgroup_auto_create: true
+```
+
+Use VLAN ID `0` when the physical ESXi uplink switchport is already access VLAN 3522. Use VLAN ID `3522` only when the ESXi uplink is a trunk carrying tagged VLAN 3522.

@@ -86,6 +86,8 @@ vm_network_eth1: ""
 # Use VLAN ID 3522 only when the ESXi uplink is a TRUNK carrying VLAN 3522.
 esxi_vswitch_name: vSwitch0
 sno_primary_portgroup_vlan_id: 0
+# Automatically create vm_network_eth0 as a standard ESXi port group when vCenter does not show it.
+sno_primary_portgroup_auto_create: true
 
 # SNO VM sizing. Increase disk for ACM / hub workloads if needed.
 sno_vm_name: hub-sno
