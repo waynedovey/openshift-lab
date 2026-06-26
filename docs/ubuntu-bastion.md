@@ -92,7 +92,7 @@ ansible-playbook -i inventories/pod22/hosts.yml playbooks/00_preflight.yml --ask
 
 ## Notes
 
-- Keep `inventories/pod22/group_vars/vault.yml` encrypted with Ansible Vault.
+- Keep `inventories/pod22/group_vars/all/vault.yml` encrypted with Ansible Vault.
 - Do not commit `.venv/`, generated ISOs, kubeconfigs, pull secrets, or the `build/` directory.
 - If the Ubuntu VM uses a proxy, export `HTTP_PROXY`, `HTTPS_PROXY`, and `NO_PROXY` before running the bootstrap and playbooks. Include `10.23.22.0/24`, `.poc.local`, vCenter, iDRACs, and the OpenShift API VIPs in `NO_PROXY`.
 

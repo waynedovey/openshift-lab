@@ -1,0 +1,20 @@
+---
+# Encrypt the real file with:
+# ansible-vault encrypt inventories/pod22/group_vars/all/vault.yml
+
+vault_vcenter_password: "CHANGE_ME"
+
+# Paste your full Red Hat pull secret JSON as a single-line string.
+vault_pull_secret: '{"auths":{"cloud.openshift.com":{"auth":"CHANGE_ME","email":"you@example.com"}}}'
+
+# SSH public key injected into the cluster nodes.
+vault_ssh_public_key: "ssh-rsa CHANGE_ME your_user@your_host"
+
+# Optional, only needed for AD DNS automation over WinRM.
+vault_ad_username: "POC\\administrator"
+vault_ad_password: "CHANGE_ME"
+
+# iDRAC credentials for Redfish virtual media automation.
+# The same credentials are used for all nodes in this starter.
+vault_idrac_username: "pureuser"
+vault_idrac_password: "CHANGE_ME"

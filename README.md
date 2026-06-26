@@ -143,9 +143,9 @@ Create your private vault file from the example:
 
 ```bash
 source .venv/bin/activate
-cp inventories/pod22/group_vars/vault.yml.example inventories/pod22/group_vars/vault.yml
-ansible-vault encrypt inventories/pod22/group_vars/vault.yml
-ansible-vault edit inventories/pod22/group_vars/vault.yml
+cp inventories/pod22/group_vars/all/vault.yml.example inventories/pod22/group_vars/all/vault.yml
+ansible-vault encrypt inventories/pod22/group_vars/all/vault.yml
+ansible-vault edit inventories/pod22/group_vars/all/vault.yml
 ```
 
 Put your real vCenter password, pull secret, and SSH public key in the encrypted vault file.
@@ -373,3 +373,44 @@ Then rerun:
 ```bash
 ansible-playbook -i inventories/pod22/hosts.yml playbooks/00_preflight.yml --ask-vault-pass
 ```
+
+## Troubleshooting: `vault_vcenter_password is undefined`
+
+The vault file must be in the `all` group vars directory so Ansible loads it automatically:
+
+```bash
+inventories/pod22/group_vars/all/vault.yml
+```
+
+If you created it in the old starter location:
+
+```bash
+inventories/pod22/group_vars/vault.yml
+```
+
+move it with:
+
+```bash
+./scripts/fix-vault-location.sh
+```
+
+Or do it manually:
+
+```bash
+mkdir -p inventories/pod22/group_vars/all
+mv inventories/pod22/group_vars/vault.yml inventories/pod22/group_vars/all/vault.yml
+```
+
+Then verify that Ansible can see the vaulted variables:
+
+```bash
+ansible-inventory -i inventories/pod22/hosts.yml --list --ask-vault-pass \
+  | jq '._meta.hostvars.localhost | has("vault_vcenter_password")'
+```
+
+It should return:
+
+```text
+true
+```
+
