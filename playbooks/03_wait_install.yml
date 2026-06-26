@@ -8,8 +8,9 @@
         msg:
           - "Install dir: {{ install_dir }}"
           - "SNO IP: {{ sno_node.ip }}"
-          - "This command can sit for a long time. Use playbooks/03_check_install_status.yml in another terminal for live checks."
-          - "Manual debug command: openshift-install agent wait-for bootstrap-complete --dir={{ install_dir }} --log-level=debug"
+          - "Auto-disconnect Agent ISO after disk write: {{ sno_auto_disconnect_iso_after_disk_write | default(true) | bool }}"
+          - "Use playbooks/03_check_install_status.yml in another terminal for live checks."
+          - "Manual debug command: openshift-install agent wait-for install-complete --dir={{ install_dir }} --log-level=debug"
 
     - name: Show latest installer log lines before waiting
       ansible.builtin.shell: |
@@ -27,13 +28,99 @@
       ansible.builtin.debug:
         var: installer_log_before.stdout_lines
 
-    - name: Wait for bootstrap to complete
+    - name: Start bootstrap wait in the background
       ansible.builtin.command: >-
         openshift-install agent wait-for bootstrap-complete
         --dir={{ install_dir }}
         --log-level=debug
-      register: bootstrap_wait
+      async: "{{ sno_bootstrap_wait_async_timeout_seconds | default(7200) }}"
+      poll: 0
+      register: bootstrap_wait_job
       changed_when: false
+
+    - name: Watch installer log until RHCOS image write reaches 100 percent
+      ansible.builtin.shell: |
+        set -o pipefail
+        if [ ! -f "{{ install_dir }}/.openshift_install.log" ]; then
+          exit 1
+        fi
+        grep -E "Writing image to disk: 100%|Installation disk writing completed|reboot" "{{ install_dir }}/.openshift_install.log" | tail -n 5
+      args:
+        executable: /bin/bash
+      changed_when: false
+      failed_when: false
+      register: disk_write_complete_log
+      until: disk_write_complete_log.rc == 0
+      retries: "{{ sno_iso_disconnect_log_retries | default(240) }}"
+      delay: "{{ sno_iso_disconnect_log_delay_seconds | default(15) }}"
+      when: sno_auto_disconnect_iso_after_disk_write | default(true) | bool
+
+    - name: Show disk-write detection result
+      ansible.builtin.debug:
+        msg:
+          - "Detected RHCOS disk write/reboot signal in installer log."
+          - "{{ disk_write_complete_log.stdout_lines | default([]) }}"
+      when:
+        - sno_auto_disconnect_iso_after_disk_write | default(true) | bool
+        - disk_write_complete_log is defined
+        - disk_write_complete_log.rc == 0
+
+    - name: Disconnect Agent ISO from SNO VM after disk write
+      ansible.builtin.command:
+        argv:
+          - "{{ playbook_dir }}/../scripts/disconnect-vm-cdrom.py"
+          - --hostname
+          - "{{ vcenter_hostname }}"
+          - --username
+          - "{{ vcenter_username }}"
+          - --password
+          - "{{ vcenter_password }}"
+          - --datacenter
+          - "{{ vsphere_datacenter }}"
+          - --vm
+          - "{{ sno_vm_name }}"
+          - --insecure
+      register: disconnect_iso_result
+      changed_when: "'Disconnected' in disconnect_iso_result.stdout"
+      no_log: true
+      delegate_to: localhost
+      when:
+        - sno_auto_disconnect_iso_after_disk_write | default(true) | bool
+        - disk_write_complete_log is defined
+        - disk_write_complete_log.rc == 0
+
+    - name: Show Agent ISO disconnect result
+      ansible.builtin.debug:
+        msg: "Agent ISO disconnected from {{ sno_vm_name }} so the next boot uses the installed disk."
+      when:
+        - disconnect_iso_result is defined
+        - disconnect_iso_result is changed
+
+    - name: Set VM boot order to disk first after ISO disconnect
+      community.vmware.vmware_guest_boot_manager:
+        hostname: "{{ vcenter_hostname }}"
+        username: "{{ vcenter_username }}"
+        password: "{{ vcenter_password }}"
+        validate_certs: "{{ validate_certs }}"
+        name: "{{ sno_vm_name }}"
+        boot_order:
+          - disk
+          - cdrom
+        boot_delay: 5000
+      delegate_to: localhost
+      when:
+        - sno_set_boot_disk_first_after_iso_disconnect | default(true) | bool
+        - disconnect_iso_result is defined
+        - disconnect_iso_result is changed
+
+    - name: Wait for bootstrap wait process to finish
+      ansible.builtin.async_status:
+        jid: "{{ bootstrap_wait_job.ansible_job_id }}"
+      register: bootstrap_wait
+      until: bootstrap_wait.finished
+      retries: "{{ sno_bootstrap_wait_poll_retries | default(240) }}"
+      delay: "{{ sno_bootstrap_wait_poll_delay_seconds | default(30) }}"
+      failed_when: bootstrap_wait.finished and (bootstrap_wait.rc | default(0)) != 0
 
     - name: Wait for install to complete
       ansible.builtin.command: >-

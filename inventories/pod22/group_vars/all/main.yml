@@ -75,25 +75,43 @@ vsphere_cluster: ""
 
 # Port group for the SNO VM machine network. This must map to VLAN 3522 on the ESXi/vSwitch side.
 # If discovery only shows MGMT and MGMT is already on VLAN 3522, set this to MGMT instead.
-vm_network_eth0: VLAN3522
+vm_network_eth0: MGMT
 
 # Optional secondary NIC. Disabled by default because the SNO hub only needs VLAN 3522.
 # Leave blank unless sno_node.secondary_nic_enabled is set to true.
 vm_network_eth1: ""
 
-# Optional helper playbook 00_create_sno_primary_portgroup.yml uses these values.
+# Optional helper playbook 00_create_sno_primary_portgroup.yml / 02_create_vsphere_vm.yml uses these values.
 # Use VLAN ID 0 when the ESXi physical uplink switchport is ACCESS VLAN 3522.
 # Use VLAN ID 3522 only when the ESXi uplink is a TRUNK carrying VLAN 3522.
-esxi_vswitch_name: vSwitch0
 sno_primary_portgroup_vlan_id: 0
-# Automatically create vm_network_eth0 as a standard ESXi port group when vCenter does not show it.
-sno_primary_portgroup_auto_create: true
+sno_primary_portgroup_auto_create: false
+
+# Auto-create mode:
+#   auto        - use a standard vSwitch when esxi_vswitch_name exists; otherwise use the distributed switch
+#   standard    - force ESXi standard vSwitch creation
+#   distributed - force vSphere Distributed Switch port group creation
+sno_primary_portgroup_create_mode: auto
+
+# Standard vSwitch fallback. If your ESXi host has no vSwitch0, the playbook will try the DVS below.
+esxi_vswitch_name: vSwitch0
+
+# vSphere Distributed Switch fallback. Your discovery output shows DSwitch-DVUplinks-18, so DSwitch is the likely DVS name.
+sno_primary_dvs_name: DSwitch
+sno_primary_dvs_num_ports: 128
 
 # SNO VM sizing. Increase disk for ACM / hub workloads if needed.
 sno_vm_name: hub-sno
 sno_vm_cpu: 16
 sno_vm_memory_mb: 65536
 sno_vm_disk_gb: 250
+
+# Optional second data disk for later hub workloads, LVM/ODF experiments, image registry, etc.
+# This playbook only attaches the disk; it does not format or mount it inside OpenShift/RHCOS.
+sno_vm_extra_disk_enabled: true
+sno_vm_extra_disk_gb: 300
+sno_vm_extra_disk_type: thin
+
 sno_vm_guest_id: rhel9_64Guest
 sno_vm_firmware: efi
 # Required for OpenShift/RHCOS on vSphere so disks are mounted and identified correctly.
@@ -126,6 +144,16 @@ esxi_upload_no_log: false
 # Use a unique ISO filename for each playbook run so ESXi does not fail with
 # "Device or resource busy" when the previous ISO is still mounted by a VM.
 iso_unique_per_upload: true
+
+# During Agent ISO installs, the VM must not reboot back into the ISO after RHCOS is written to disk.
+# 03_wait_install.yml watches the installer log and disconnects the CD-ROM once disk write reaches 100%.
+sno_auto_disconnect_iso_after_disk_write: true
+sno_set_boot_disk_first_after_iso_disconnect: true
+sno_iso_disconnect_log_retries: 240
+sno_iso_disconnect_log_delay_seconds: 15
+sno_bootstrap_wait_async_timeout_seconds: 7200
+sno_bootstrap_wait_poll_retries: 240
+sno_bootstrap_wait_poll_delay_seconds: 30
 
 # Leave iso_datastore_folder empty ("") to upload to the datastore root.
 iso_datastore_folder: iso/ocp

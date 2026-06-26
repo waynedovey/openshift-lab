@@ -235,11 +235,37 @@
             else []
           }}
 
-    - name: Show SNO VM network adapter plan
+    - name: Build SNO VM disk list
+      ansible.builtin.set_fact:
+        sno_vm_disks: >-
+          {{
+            [
+              {
+                'size_gb': sno_vm_disk_gb,
+                'type': 'thin',
+                'datastore': vsphere_datastore
+              }
+            ]
+            +
+            (
+              [
+                {
+                  'size_gb': sno_vm_extra_disk_gb | default(300),
+                  'type': sno_vm_extra_disk_type | default('thin'),
+                  'datastore': vsphere_datastore
+                }
+              ]
+              if (sno_vm_extra_disk_enabled | default(false) | bool)
+              else []
+            )
+          }}
+
+    - name: Show SNO VM network and disk plan
       ansible.builtin.debug:
         msg:
           - "Primary NIC only: {{ not (sno_node.secondary_nic_enabled | default(false) | bool) }}"
           - "VM networks: {{ sno_vm_networks }}"
+          - "VM disks: {{ sno_vm_disks }}"
           - "disk.EnableUUID will be set to {{ sno_vm_disk_enable_uuid | default(true) | bool }}"
 
     - name: Validate configured vSphere datacenter exists before VM creation
@@ -264,6 +290,67 @@
           - "Discovered networks in {{ vsphere_datacenter }}: {{ vsphere_networks_in_dc }}"
           - "Requested SNO primary network: {{ vm_network_eth0 }}"
 
+    - name: Show ESXi standard and distributed switch details when primary port group is missing
+      ansible.builtin.command:
+        argv:
+          - sshpass
+          - -e
+          - ssh
+          - -o
+          - StrictHostKeyChecking=no
+          - -o
+          - UserKnownHostsFile=/dev/null
+          - "{{ esxi_username }}@{{ esxi_hostname }}"
+          - >-
+            echo '## Standard vSwitches';
+            esxcli network vswitch standard list || true;
+            echo;
+            echo '## Standard Port Groups';
+            esxcli network vswitch standard portgroup list || true;
+            echo;
+            echo '## Distributed Switches';
+            esxcli network vswitch dvs vmware list || true
+      environment:
+        SSHPASS: "{{ esxi_password }}"
+      changed_when: false
+      register: esxi_network_detail
+      no_log: "{{ esxi_upload_no_log | default(false) | bool }}"
+      when:
+        - sno_primary_portgroup_auto_create | default(true) | bool
+        - vm_network_eth0 not in vsphere_networks_in_dc
+
+    - name: Print ESXi switch details when primary port group is missing
+      ansible.builtin.debug:
+        var: esxi_network_detail.stdout_lines
+      when:
+        - esxi_network_detail is defined
+        - esxi_network_detail.stdout_lines is defined
+        - not (esxi_upload_no_log | default(false) | bool)
+
+    - name: Check whether configured standard vSwitch exists
+      ansible.builtin.command:
+        argv:
+          - sshpass
+          - -e
+          - ssh
+          - -o
+          - StrictHostKeyChecking=no
+          - -o
+          - UserKnownHostsFile=/dev/null
+          - "{{ esxi_username }}@{{ esxi_hostname }}"
+          - >-
+            esxcli network vswitch standard list | awk '/^Name:/ {print $2}' | grep -x '{{ esxi_vswitch_name }}'
+      environment:
+        SSHPASS: "{{ esxi_password }}"
+      changed_when: false
+      failed_when: false
+      register: esxi_standard_vswitch_check
+      no_log: "{{ esxi_upload_no_log | default(false) | bool }}"
+      when:
+        - sno_primary_portgroup_auto_create | default(true) | bool
+        - vm_network_eth0 not in vsphere_networks_in_dc
+        - sno_primary_portgroup_create_mode | default('auto') in ['auto', 'standard']
+
     - name: Auto-create missing SNO primary standard port group on ESXi
       ansible.builtin.command:
         argv:
@@ -277,7 +364,6 @@
           - "{{ esxi_username }}@{{ esxi_hostname }}"
           - >-
             set -e;
-            esxcli network vswitch standard list | grep -w '{{ esxi_vswitch_name }}' >/dev/null;
             esxcli network vswitch standard portgroup list | awk 'NR>1 {print $1}' | grep -x '{{ vm_network_eth0 }}' >/dev/null
             || esxcli network vswitch standard portgroup add -p '{{ vm_network_eth0 }}' -v '{{ esxi_vswitch_name }}';
             esxcli network vswitch standard portgroup set -p '{{ vm_network_eth0 }}' -v '{{ sno_primary_portgroup_vlan_id }}';
@@ -290,21 +376,56 @@
       when:
         - sno_primary_portgroup_auto_create | default(true) | bool
         - vm_network_eth0 not in vsphere_networks_in_dc
+        - sno_primary_portgroup_create_mode | default('auto') in ['auto', 'standard']
+        - esxi_standard_vswitch_check is defined
+        - esxi_standard_vswitch_check.rc == 0
+
+    - name: Auto-create missing SNO primary distributed port group through vCenter
+      ansible.builtin.command:
+        argv:
+          - "{{ playbook_dir }}/../scripts/create-dvs-portgroup.py"
+          - --hostname
+          - "{{ vcenter_hostname }}"
+          - --username
+          - "{{ vcenter_username }}"
+          - --password
+          - "{{ vcenter_password }}"
+          - --datacenter
+          - "{{ vsphere_datacenter }}"
+          - --switch-name
+          - "{{ sno_primary_dvs_name }}"
+          - --portgroup-name
+          - "{{ vm_network_eth0 }}"
+          - --vlan-id
+          - "{{ sno_primary_portgroup_vlan_id }}"
+          - --num-ports
+          - "{{ sno_primary_dvs_num_ports | default(128) }}"
+      changed_when: "'Created distributed port group' in auto_create_dvs_portgroup_result.stdout"
+      register: auto_create_dvs_portgroup_result
+      no_log: true
+      when:
+        - sno_primary_portgroup_auto_create | default(true) | bool
+        - vm_network_eth0 not in vsphere_networks_in_dc
+        - sno_primary_portgroup_create_mode | default('auto') in ['auto', 'distributed']
+        - (sno_primary_portgroup_create_mode | default('auto') == 'distributed') or
+          (esxi_standard_vswitch_check is not defined or esxi_standard_vswitch_check.rc != 0)
 
     - name: Show auto-created SNO port group result
       ansible.builtin.debug:
-        var: auto_create_portgroup_result.stdout_lines
+        msg:
+          - "Standard create: {{ auto_create_portgroup_result.stdout_lines | default([]) }}"
+          - "Distributed create: {{ auto_create_dvs_portgroup_result.stdout_lines | default([]) }}"
+          - "If distributed create failed, check sno_primary_dvs_name. Discovery showed a DSwitch uplink object, so DSwitch is the likely value."
       when:
-        - auto_create_portgroup_result is defined
-        - auto_create_portgroup_result.stdout_lines is defined
+        - (auto_create_portgroup_result is defined) or (auto_create_dvs_portgroup_result is defined)
         - not (esxi_upload_no_log | default(false) | bool)
 
-    - name: Wait briefly for vCenter to see new ESXi port group
+    - name: Wait briefly for vCenter to see new port group
       ansible.builtin.pause:
         seconds: 8
       when:
-        - auto_create_portgroup_result is defined
-        - auto_create_portgroup_result is changed
+        - (auto_create_portgroup_result is defined and auto_create_portgroup_result is changed) or
+          (auto_create_dvs_portgroup_result is defined and auto_create_dvs_portgroup_result is changed)
 
     - name: Rediscover vSphere inventory after optional port group creation
       ansible.builtin.command:
@@ -320,8 +441,8 @@
       no_log: true
       register: vsphere_inventory_raw_after_portgroup
       when:
-        - auto_create_portgroup_result is defined
-        - auto_create_portgroup_result is changed
+        - (auto_create_portgroup_result is defined and auto_create_portgroup_result is changed) or
+          (auto_create_dvs_portgroup_result is defined and auto_create_dvs_portgroup_result is changed)
 
     - name: Parse rediscovered vSphere inventory after optional port group creation
       ansible.builtin.set_fact:
@@ -349,7 +470,7 @@
           - vm_network_eth0 in vsphere_networks_in_dc
         fail_msg: >-
           The configured datastore or primary port group does not exist in datacenter {{ vsphere_datacenter }}.
-          Available datastores: {{ vsphere_datastores_in_dc }}. Available networks: {{ vsphere_networks_in_dc }}. Either set vm_network_eth0 to a listed network such as MGMT, or set sno_primary_portgroup_auto_create=true and ensure esxi_vswitch_name is correct.
+          Available datastores: {{ vsphere_datastores_in_dc }}. Available networks: {{ vsphere_networks_in_dc }}. Either set vm_network_eth0 to a listed network such as MGMT, or set sno_primary_portgroup_auto_create=true and ensure esxi_vswitch_name/sno_primary_dvs_name is correct.
           For this SNO hub, vm_network_eth1 is not required.
 
     - name: Validate optional secondary vSphere port group before VM creation
@@ -407,10 +528,7 @@
           num_cpus: "{{ sno_vm_cpu }}"
           scsi: paravirtual
           boot_firmware: "{{ sno_vm_firmware }}"
-        disk:
-          - size_gb: "{{ sno_vm_disk_gb }}"
-            type: thin
-            datastore: "{{ vsphere_datastore }}"
+        disk: "{{ sno_vm_disks }}"
         networks: "{{ sno_vm_networks }}"
         cdrom:
           - controller_number: 0

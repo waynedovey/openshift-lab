@@ -9,7 +9,7 @@ sno_node:
   primary_interface: ens192
   secondary_nic_enabled: false
 
-vm_network_eth0: VLAN3522
+vm_network_eth0: MGMT
 vm_network_eth1: ""
 ```
 
@@ -306,7 +306,7 @@ sno_node:
   mac_eth1: ""
   secondary_interface: ""
 
-vm_network_eth0: VLAN3522
+vm_network_eth0: MGMT
 vm_network_eth1: ""
 
 sno_vm_disk_enable_uuid: true
@@ -337,6 +337,23 @@ sno_vm_recreate: true
 ```
 
 Set it back to `false` after the clean VM has been created.
+
+This repo also adds a second 300 GB thin disk to the SNO VM for later use:
+
+```yaml
+sno_vm_extra_disk_enabled: true
+sno_vm_extra_disk_gb: 300
+sno_vm_extra_disk_type: thin
+```
+
+The second disk is only attached to the VM. It is not formatted or mounted automatically inside RHCOS/OpenShift.
+
+`03_wait_install.yml` also watches the installer log and disconnects the Agent ISO after the RHCOS image has been written to disk, then changes the VM boot order to disk-first. This prevents the VM from rebooting back into the Agent ISO.
+
+```yaml
+sno_auto_disconnect_iso_after_disk_write: true
+sno_set_boot_disk_first_after_iso_disconnect: true
+```
 
 ## Run the SNO hub build
 
@@ -723,7 +740,7 @@ ansible-playbook -i inventories/pod22/hosts.yml playbooks/00_discover_vsphere_in
 If discovery only shows `MGMT` and `DSwitch-DVUplinks-18`, either set `vm_network_eth0: MGMT` if MGMT is already backed by VLAN 3522, or create a dedicated port group:
 
 ```yaml
-vm_network_eth0: VLAN3522
+vm_network_eth0: MGMT
 vm_network_eth1: ""
 esxi_vswitch_name: vSwitch0
 sno_primary_portgroup_vlan_id: 0
@@ -780,11 +797,11 @@ The VMware SNO hub uses one NIC only. By default, `vm_network_eth0` is `VLAN3522
 Defaults:
 
 ```yaml
-vm_network_eth0: VLAN3522
+vm_network_eth0: MGMT
 vm_network_eth1: ""
 esxi_vswitch_name: vSwitch0
 sno_primary_portgroup_vlan_id: 0
-sno_primary_portgroup_auto_create: true
+sno_primary_portgroup_auto_create: false
 ```
 
 Use VLAN ID `0` when the physical ESXi uplink switchport is already access VLAN 3522. Use VLAN ID `3522` only when the ESXi uplink is a trunk carrying tagged VLAN 3522.
