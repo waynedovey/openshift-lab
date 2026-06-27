@@ -1,0 +1,90 @@
+---
+- name: Wait for Site-A HCP prerequisites installed by RHACM policies
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: Confirm hub kubeconfig exists
+      ansible.builtin.stat:
+        path: "{{ hub_kubeconfig }}"
+      register: hub_kubeconfig_stat
+
+    - name: Stop if hub kubeconfig is missing
+      ansible.builtin.fail:
+        msg: "Hub kubeconfig not found at {{ hub_kubeconfig }}."
+      when: not hub_kubeconfig_stat.stat.exists
+
+    - name: Ensure Site-A kubeconfig output directory exists
+      ansible.builtin.file:
+        path: "{{ site_a_kubeconfig_file | dirname }}"
+        state: directory
+        mode: "0755"
+
+    - name: Extract Site-A admin kubeconfig from RHACM hub
+      ansible.builtin.shell: |
+        set -euo pipefail
+        oc -n {{ bm_cluster_name }} get secret {{ bm_cluster_name }}-admin-kubeconfig -o jsonpath='{.data.kubeconfig}' | base64 -d > {{ site_a_kubeconfig_file }}
+        chmod 0600 {{ site_a_kubeconfig_file }}
+      args:
+        executable: /bin/bash
+      environment:
+        KUBECONFIG: "{{ hub_kubeconfig }}"
+      changed_when: true
+
+    - name: Show Site-A policy compliance from hub
+      ansible.builtin.command: oc -n {{ site_a_policy_namespace }} get policy -o wide
+      environment:
+        KUBECONFIG: "{{ hub_kubeconfig }}"
+      changed_when: false
+      register: policy_status
+
+    - name: Print policy compliance
+      ansible.builtin.debug:
+        var: policy_status.stdout_lines
+
+    - name: Wait for OpenShift Virtualization HyperConverged to become Available
+      ansible.builtin.command: >-
+        oc --kubeconfig {{ site_a_kubeconfig_file }} -n {{ site_a_virt_namespace }}
+        wait hyperconverged/kubevirt-hyperconverged --for=condition=Available --timeout=45m
+      changed_when: false
+
+    - name: Wait for MCE to become Available
+      ansible.builtin.command: >-
+        oc --kubeconfig {{ site_a_kubeconfig_file }}
+        wait multiclusterengine/{{ site_a_mce_name }} --for=condition=Available --timeout=45m
+      changed_when: false
+
+    - name: Wait for MetalLB CRD to exist
+      ansible.builtin.command: >-
+        oc --kubeconfig {{ site_a_kubeconfig_file }}
+        wait --for=condition=Established crd/ipaddresspools.metallb.io --timeout=15m
+      changed_when: false
+
+    - name: Show Site-A HCP prerequisite status
+      ansible.builtin.shell: |
+        set -euo pipefail
+        echo '# Site-A cluster operators'
+        oc --kubeconfig {{ site_a_kubeconfig_file }} get co
+        echo
+        echo '# Virtualization'
+        oc --kubeconfig {{ site_a_kubeconfig_file }} -n {{ site_a_virt_namespace }} get hyperconverged,pods
+        echo
+        echo '# MCE / HyperShift'
+        oc --kubeconfig {{ site_a_kubeconfig_file }} get multiclusterengine
+        oc --kubeconfig {{ site_a_kubeconfig_file }} get pods -A | egrep -i 'multicluster|hypershift|hosted|capi|mce' || true
+        echo
+        echo '# MetalLB'
+        oc --kubeconfig {{ site_a_kubeconfig_file }} -n {{ site_a_metallb_namespace }} get metallb,ipaddresspool,l2advertisement,pods
+        echo
+        echo '# Ingress wildcard policy'
+        oc --kubeconfig {{ site_a_kubeconfig_file }} -n openshift-ingress-operator get ingresscontroller default -o jsonpath='{.spec.routeAdmission.wildcardPolicy}{"\n"}'
+        echo
+        echo '# Storage classes'
+        oc --kubeconfig {{ site_a_kubeconfig_file }} get sc
+      args:
+        executable: /bin/bash
+      changed_when: false
+      register: prereq_status
+
+    - name: Print Site-A HCP prerequisite status
+      ansible.builtin.debug:
+        var: prereq_status.stdout_lines

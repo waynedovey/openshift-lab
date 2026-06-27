@@ -1,0 +1,137 @@
+---
+- name: Apply RHACM policies that prepare Site-A as an HCP KubeVirt hosting cluster
+  hosts: localhost
+  gather_facts: false
+  vars:
+    policy_templates:
+      - templates/site-a-hcp-policies/00-placement-and-bindings.yaml.j2
+      - templates/site-a-hcp-policies/01-openshift-virtualization-policy.yaml.j2
+      - templates/site-a-hcp-policies/02-mce-policy.yaml.j2
+      - templates/site-a-hcp-policies/03-metallb-policy.yaml.j2
+      - templates/site-a-hcp-policies/04-ingress-wildcards-policy.yaml.j2
+      - templates/site-a-hcp-policies/05-lvm-policy.yaml.j2
+  tasks:
+    - name: Confirm hub kubeconfig exists
+      ansible.builtin.stat:
+        path: "{{ hub_kubeconfig }}"
+      register: hub_kubeconfig_stat
+
+    - name: Stop if hub kubeconfig is missing
+      ansible.builtin.fail:
+        msg: "Hub kubeconfig not found at {{ hub_kubeconfig }}. Export KUBECONFIG or complete the hub install first."
+      when: not hub_kubeconfig_stat.stat.exists
+
+    - name: Create rendered policy directory
+      ansible.builtin.file:
+        path: "{{ site_a_policy_rendered_dir }}"
+        state: directory
+        mode: "0755"
+
+    - name: Ensure Site-A policy namespace exists on hub
+      ansible.builtin.command: oc create namespace {{ site_a_policy_namespace }} --dry-run=client -o yaml
+      environment:
+        KUBECONFIG: "{{ hub_kubeconfig }}"
+      changed_when: false
+      register: site_a_policy_namespace_manifest
+
+    - name: Apply Site-A policy namespace on hub
+      ansible.builtin.command: oc apply -f -
+      args:
+        stdin: "{{ site_a_policy_namespace_manifest.stdout }}"
+      environment:
+        KUBECONFIG: "{{ hub_kubeconfig }}"
+      changed_when: true
+
+    - name: Ensure Site-A ManagedClusterSet exists
+      ansible.builtin.shell: |
+        set -euo pipefail
+        cat <<'EOF' | oc apply -f -
+        apiVersion: cluster.open-cluster-management.io/v1beta2
+        kind: ManagedClusterSet
+        metadata:
+          name: {{ bm_clusterset }}
+        EOF
+      args:
+        executable: /bin/bash
+      environment:
+        KUBECONFIG: "{{ hub_kubeconfig }}"
+      changed_when: true
+
+    - name: Label Site-A ManagedCluster with ClusterSet and HCP hosting labels
+      ansible.builtin.command: >-
+        oc label managedcluster {{ bm_cluster_name }}
+        cluster.open-cluster-management.io/clusterset={{ bm_clusterset }}
+        {{ site_a_policy_cluster_label_key }}={{ site_a_policy_cluster_label_value }}
+        --overwrite
+      environment:
+        KUBECONFIG: "{{ hub_kubeconfig }}"
+      changed_when: true
+
+    - name: Ensure Site-A ManagedClusterSetBinding exists in policy namespace
+      ansible.builtin.shell: |
+        set -euo pipefail
+        cat <<'EOF' | oc apply -f -
+        apiVersion: cluster.open-cluster-management.io/v1beta2
+        kind: ManagedClusterSetBinding
+        metadata:
+          name: {{ bm_clusterset }}
+          namespace: {{ site_a_policy_namespace }}
+        spec:
+          clusterSet: {{ bm_clusterset }}
+        EOF
+      args:
+        executable: /bin/bash
+      environment:
+        KUBECONFIG: "{{ hub_kubeconfig }}"
+      changed_when: true
+
+    - name: Configure the hub hypershift add-on for MCE hosted-cluster discovery when the AddOnDeploymentConfig exists
+      ansible.builtin.shell: |
+        set -euo pipefail
+        if oc -n multicluster-engine get addondeploymentconfig hypershift-addon-deploy-config >/dev/null 2>&1; then
+          oc -n multicluster-engine patch addondeploymentconfig hypershift-addon-deploy-config --type=merge \
+            -p '{"spec":{"agentInstallNamespace":"open-cluster-management-agent-addon-discovery","customizedVariables":[{"name":"configureMceImport","value":"true"}]}}'
+        else
+          echo "hypershift-addon-deploy-config not found yet on hub; skipping patch"
+        fi
+      args:
+        executable: /bin/bash
+      environment:
+        KUBECONFIG: "{{ hub_kubeconfig }}"
+      changed_when: "'patched' in hypershift_addon_patch.stdout or 'configured' in hypershift_addon_patch.stdout"
+      register: hypershift_addon_patch
+
+    - name: Render Site-A HCP policy manifests
+      ansible.builtin.template:
+        src: "{{ playbook_dir }}/../{{ item }}"
+        dest: "{{ site_a_policy_rendered_dir }}/{{ item | basename | regex_replace('\\.j2$', '') }}"
+        mode: "0644"
+      loop: "{{ policy_templates }}"
+
+    - name: Apply non-empty Site-A HCP policy manifests to hub
+      ansible.builtin.shell: |
+        set -euo pipefail
+        for f in {{ site_a_policy_rendered_dir }}/*.yaml; do
+          if [ -s "$f" ] && grep -Eq '^(apiVersion|kind):' "$f"; then
+            echo "Applying $f"
+            oc apply -f "$f"
+          else
+            echo "Skipping empty/non-manifest $f"
+          fi
+        done
+      args:
+        executable: /bin/bash
+      environment:
+        KUBECONFIG: "{{ hub_kubeconfig }}"
+      changed_when: true
+
+    - name: Show policies
+      ansible.builtin.command: oc -n {{ site_a_policy_namespace }} get managedclustersetbinding,policy,placement,placementbinding
+      environment:
+        KUBECONFIG: "{{ hub_kubeconfig }}"
+      changed_when: false
+      register: site_a_hcp_policy_status
+
+    - name: Print policy status
+      ansible.builtin.debug:
+        var: site_a_hcp_policy_status.stdout_lines

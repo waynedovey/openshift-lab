@@ -9,6 +9,16 @@
       ansible.builtin.meta: end_play
       when: not assisted_service_configure | bool
 
+
+    - name: Wait for configured Assisted Service StorageClass when set
+      ansible.builtin.command: "oc get storageclass {{ assisted_service_storage_class }}"
+      register: assisted_storage_class
+      changed_when: false
+      retries: 40
+      delay: 15
+      until: assisted_storage_class.rc == 0
+      when: assisted_service_storage_class | length > 0
+
     - name: Wait for AgentServiceConfig CRD
       ansible.builtin.command: oc get crd agentserviceconfigs.agent-install.openshift.io
       register: asc_crd

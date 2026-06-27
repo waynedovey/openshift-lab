@@ -1,0 +1,33 @@
+---
+- name: Discover iDRAC NIC MACs and link state for bare-metal nodes
+  hosts: ansible_controller
+  gather_facts: false
+  tasks:
+    - name: Build enabled bare-metal node list for NIC discovery
+      ansible.builtin.set_fact:
+        bm_enabled_nodes_json: "{{ bm_nodes | selectattr('enabled', 'equalto', true) | list | to_json }}"
+
+    - name: Discover host NIC MACs and link status through iDRAC Redfish
+      ansible.builtin.command:
+        argv:
+          - "{{ repo_root }}/scripts/discover-idrac-nics.py"
+          - --nodes-json
+          - "{{ bm_enabled_nodes_json }}"
+          - --user
+          - "{{ vault_idrac_username }}"
+      environment:
+        IDRAC_PASSWORD: "{{ vault_idrac_password }}"
+      register: idrac_nic_discovery
+      changed_when: false
+      no_log: false
+
+    - name: Show iDRAC NIC discovery results
+      ansible.builtin.debug:
+        msg: "{{ idrac_nic_discovery.stdout_lines }}"
+
+    - name: Show likely RHCOS interface-name fix for R6525 Broadcom NICs
+      ansible.builtin.debug:
+        msg:
+          - "Your screenshot shows b08-33 RHCOS interface name: eno33np0"
+          - "If the MAC is correct but the static IP is not applied, set primary_interface: eno33np0 for b08-33/b08-34/b08-35 and re-render/apply Site-A manifests."
+          - "iDRAC discovers hardware MAC/link state; the Linux interface name comes from RHCOS/Agent inventory."

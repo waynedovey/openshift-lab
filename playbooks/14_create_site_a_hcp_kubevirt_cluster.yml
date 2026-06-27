@@ -1,0 +1,125 @@
+---
+- name: Create a test HCP cluster from Site-A using the KubeVirt platform
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: Ensure Site-A kubeconfig output directory exists
+      ansible.builtin.file:
+        path: "{{ site_a_kubeconfig_file | dirname }}"
+        state: directory
+        mode: "0755"
+
+    - name: Extract Site-A admin kubeconfig from RHACM hub
+      ansible.builtin.shell: |
+        set -euo pipefail
+        oc -n {{ bm_cluster_name }} get secret {{ bm_cluster_name }}-admin-kubeconfig -o jsonpath='{.data.kubeconfig}' | base64 -d > {{ site_a_kubeconfig_file }}
+        chmod 0600 {{ site_a_kubeconfig_file }}
+      args:
+        executable: /bin/bash
+      environment:
+        KUBECONFIG: "{{ hub_kubeconfig }}"
+      changed_when: true
+
+    - name: Create HCP working directories
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        mode: "0755"
+      loop:
+        - "{{ site_a_hcp_pull_secret_file | dirname }}"
+        - "{{ site_a_hcp_cli_path | dirname }}"
+
+    - name: Write pull secret for hcp CLI
+      ansible.builtin.copy:
+        content: "{{ pull_secret }}"
+        dest: "{{ site_a_hcp_pull_secret_file }}"
+        mode: "0600"
+      no_log: true
+
+    - name: Write SSH public key for hosted cluster workers
+      ansible.builtin.copy:
+        content: "{{ ssh_pub_key }}\n"
+        dest: "{{ site_a_hcp_ssh_key_file }}"
+        mode: "0644"
+
+    - name: Install hcp CLI from Site-A cluster if needed
+      ansible.builtin.command: >-
+        {{ repo_root }}/scripts/install-hcp-cli-from-cluster.sh
+        {{ site_a_kubeconfig_file }}
+        {{ site_a_hcp_cli_path }}
+      changed_when: true
+
+    - name: Ensure hosted cluster namespace exists on Site-A
+      ansible.builtin.shell: |
+        set -euo pipefail
+        oc --kubeconfig {{ site_a_kubeconfig_file }} create namespace {{ site_a_hcp_namespace }} --dry-run=client -o yaml | oc --kubeconfig {{ site_a_kubeconfig_file }} apply -f -
+      args:
+        executable: /bin/bash
+      changed_when: true
+
+    - name: Determine Site-A etcd storage class for HCP
+      ansible.builtin.shell: |
+        set -euo pipefail
+        if [ -n "{{ site_a_hcp_etcd_storage_class | default('') }}" ]; then
+          echo "{{ site_a_hcp_etcd_storage_class }}"
+          exit 0
+        fi
+        oc --kubeconfig {{ site_a_kubeconfig_file }} get sc -o json | python3 -c 'import json,sys; o=json.load(sys.stdin); sc=[i["metadata"]["name"] for i in o.get("items",[]) if i.get("metadata",{}).get("annotations",{}).get("storageclass.kubernetes.io/is-default-class") == "true" or i.get("metadata",{}).get("annotations",{}).get("storageclass.beta.kubernetes.io/is-default-class") == "true"]; print(sc[0] if sc else "")'
+      args:
+        executable: /bin/bash
+      register: detected_hcp_etcd_sc
+      changed_when: false
+
+    - name: Stop if no HCP etcd storage class is available
+      ansible.builtin.fail:
+        msg: >-
+          No Site-A default StorageClass was detected and site_a_hcp_etcd_storage_class is blank.
+          Install storage on Site-A first or set site_a_hcp_etcd_storage_class in inventories/pod22/group_vars/all/main.yml.
+      when: detected_hcp_etcd_sc.stdout | trim | length == 0
+
+    - name: Show HCP create settings
+      ansible.builtin.debug:
+        msg:
+          - "HCP management/hosting cluster kubeconfig: {{ site_a_kubeconfig_file }}"
+          - "Hosted cluster name: {{ site_a_hcp_cluster_name }}"
+          - "Hosted cluster namespace: {{ site_a_hcp_namespace }}"
+          - "NodePool replicas: {{ site_a_hcp_nodepool_replicas }}"
+          - "Worker VM size: {{ site_a_hcp_worker_cores }} cores / {{ site_a_hcp_worker_memory }}"
+          - "Release image: {{ site_a_hcp_release_image }}"
+          - "etcd StorageClass: {{ detected_hcp_etcd_sc.stdout | trim }}"
+
+    - name: Create HCP KubeVirt hosted cluster if it does not already exist
+      ansible.builtin.shell: |
+        set -euo pipefail
+        if oc --kubeconfig {{ site_a_kubeconfig_file }} -n {{ site_a_hcp_namespace }} get hostedcluster {{ site_a_hcp_cluster_name }} >/dev/null 2>&1; then
+          echo "HostedCluster {{ site_a_hcp_cluster_name }} already exists in namespace {{ site_a_hcp_namespace }}"
+          exit 0
+        fi
+        KUBECONFIG={{ site_a_kubeconfig_file }} {{ site_a_hcp_cli_path }} create cluster kubevirt \
+          --name {{ site_a_hcp_cluster_name }} \
+          --namespace {{ site_a_hcp_namespace }} \
+          --node-pool-replicas {{ site_a_hcp_nodepool_replicas }} \
+          --pull-secret {{ site_a_hcp_pull_secret_file }} \
+          --ssh-key {{ site_a_hcp_ssh_key_file }} \
+          --memory {{ site_a_hcp_worker_memory }} \
+          --cores {{ site_a_hcp_worker_cores }} \
+          --etcd-storage-class {{ detected_hcp_etcd_sc.stdout | trim }} \
+          --release-image {{ site_a_hcp_release_image }}
+      args:
+        executable: /bin/bash
+      changed_when: true
+
+    - name: Show hosted cluster status on Site-A
+      ansible.builtin.shell: |
+        set -euo pipefail
+        oc --kubeconfig {{ site_a_kubeconfig_file }} -n {{ site_a_hcp_namespace }} get hostedcluster,nodepool
+        oc --kubeconfig {{ site_a_kubeconfig_file }} -n {{ site_a_hcp_namespace }} get pods || true
+        oc --kubeconfig {{ site_a_kubeconfig_file }} -n clusters-{{ site_a_hcp_cluster_name }} get pods || true
+      args:
+        executable: /bin/bash
+      changed_when: false
+      register: hcp_status
+
+    - name: Print hosted cluster status
+      ansible.builtin.debug:
+        var: hcp_status.stdout_lines

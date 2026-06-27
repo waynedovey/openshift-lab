@@ -518,7 +518,7 @@ https://console-openshift-console.apps.hub-sno.poc.local
 - `.local` can conflict with mDNS in some environments. It is okay for a controlled lab, but a normal DNS zone is cleaner.
 - The ACM bare-metal flow assumes Redfish virtual media because DHCP and a provisioning network are not being used.
 - The b09-33 and b09-34 boot NIC MAC addresses are placeholders and must be filled in before running `08_apply_baremetal_cluster.yml`.
-- The starter enforces iDRAC firmware consistency and currently expects `7.30.30.51`. Update `idrac_firmware_expected` if you standardise on a different version.
+- The starter enforces iDRAC firmware consistency and currently expects `7.30.10.50`. Update `idrac_firmware_expected` if you standardise on a different version.
 
 
 
@@ -805,3 +805,75 @@ sno_primary_portgroup_auto_create: false
 ```
 
 Use VLAN ID `0` when the physical ESXi uplink switchport is already access VLAN 3522. Use VLAN ID `3522` only when the ESXi uplink is a trunk carrying tagged VLAN 3522.
+
+---
+
+## Day-2: LVM, RHACM, bare-metal provisioning, and Site-A
+
+The repo now includes a Day-2 flow for the hub after `hub-sno` is installed:
+
+```bash
+cd ~/OCP/ocp-sno-vsphere-ansible
+source .venv/bin/activate
+./scripts/run-site-a-day2.sh
+```
+
+This flow:
+
+1. Adds a 300 GB second disk to the `hub-sno` VM if it is missing.
+2. Installs the LVM Storage Operator.
+3. Creates an `LVMCluster` using `/dev/sdb` and sets `lvms-vg1` as the default StorageClass.
+4. Installs RHACM.
+5. Configures Assisted Service storage.
+6. Enables/validates bare-metal provisioning.
+7. Configures DNS for `site-a`.
+8. Adds `b08-33`, `b08-34`, and `b08-35` through iDRAC/Redfish virtual media.
+9. Provisions the managed cluster as `site-a` / `Site-A`.
+
+See `docs/site-a-day2.md` for the step-by-step commands and troubleshooting checks.
+
+
+### Assisted Image Service rootfs preflight
+
+Before applying or rebooting the bare-metal hosts, run:
+
+```bash
+ansible-playbook -i inventories/pod22/hosts.yml playbooks/07_validate_assisted_image_service.yml --ask-vault-pass
+```
+
+This catches the common iDRAC console failure where the node shows `coreos-livepxe-rootfs` and `curl: (22) The requested URL returned error: 503`. The usual cause is that AD DNS for `*.apps.hub-sno.poc.local` still points at an old VIP instead of the SNO IP `10.23.22.90`, or the Assisted Image Service route has no ready endpoints.
+
+## Site-A bare-metal NIC mapping
+
+If a bare-metal node boots but does not receive its static IP, verify both the
+hardware MAC and the RHCOS Linux interface name. Dell/iDRAC may show Integrated
+NIC 1 Port 1, while RHCOS names the interface `eno33np0`.
+
+Run:
+
+```bash
+ansible-playbook -i inventories/pod22/hosts.yml playbooks/05_discover_idrac_nics.yml --ask-vault-pass
+```
+
+For the current R6525 b08-33/b08-34/b08-35 nodes, the repo defaults the primary
+bare-metal interface to `eno33np0` and uses the Integrated NIC 1 Port 1 MACs.
+
+If manifests were already applied with the wrong interface name:
+
+```bash
+ansible-playbook -i inventories/pod22/hosts.yml playbooks/08_reset_site_a_for_nmstate_fix.yml --ask-vault-pass
+ansible-playbook -i inventories/pod22/hosts.yml playbooks/08_apply_baremetal_cluster.yml --ask-vault-pass
+ansible-playbook -i inventories/pod22/hosts.yml playbooks/08_reboot_site_a_nodes.yml --ask-vault-pass
+```
+
+## Site-A HCP KubeVirt hosting
+
+After `site-a` is installed and imported into RHACM, you can prepare it as a Hosted Control Plane hosting cluster with OpenShift Virtualization, MCE, MetalLB, and wildcard ingress policies:
+
+```bash
+ansible-playbook -i inventories/pod22/hosts.yml playbooks/12_apply_site_a_hcp_policies.yml --ask-vault-pass
+ansible-playbook -i inventories/pod22/hosts.yml playbooks/13_wait_site_a_hcp_prereqs.yml --ask-vault-pass
+ansible-playbook -i inventories/pod22/hosts.yml playbooks/14_create_site_a_hcp_kubevirt_cluster.yml --ask-vault-pass
+```
+
+See `docs/site-a-hcp-kubevirt.md` for details and validation commands.

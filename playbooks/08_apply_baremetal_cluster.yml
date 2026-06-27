@@ -5,6 +5,33 @@
   environment:
     KUBECONFIG: "{{ hub_kubeconfig }}"
   tasks:
+
+    - name: Wait for ACM/Hive/Assisted/BareMetal CRDs used by Site-A
+      ansible.builtin.command: "oc get crd {{ item }}"
+      register: required_crd
+      changed_when: false
+      retries: 120
+      delay: 15
+      until: required_crd.rc == 0
+      loop:
+        - clusterdeployments.hive.openshift.io
+        - clusterimagesets.hive.openshift.io
+        - agentclusterinstalls.extensions.hive.openshift.io
+        - infraenvs.agent-install.openshift.io
+        - nmstateconfigs.agent-install.openshift.io
+        - baremetalhosts.metal3.io
+        - managedclusters.cluster.open-cluster-management.io
+        - klusterletaddonconfigs.agent.open-cluster-management.io
+
+    - name: Show Site-A bare-metal node plan
+      ansible.builtin.debug:
+        msg:
+          - "Cluster: {{ bm_cluster_name }} / display {{ bm_cluster_display_name | default(bm_cluster_name) }}"
+          - "Control-plane nodes: {{ bm_nodes | selectattr('enabled', 'equalto', true) | selectattr('role', 'equalto', 'master') | map(attribute='name') | list }}"
+          - "Worker nodes: {{ bm_nodes | selectattr('enabled', 'equalto', true) | selectattr('role', 'equalto', 'worker') | map(attribute='name') | list }}"
+          - "API VIP: {{ bm_api_vip }}"
+          - "Ingress VIP: {{ bm_ingress_vip }}"
+
     - name: Validate bare-metal control-plane and worker counts
       ansible.builtin.assert:
         that:
