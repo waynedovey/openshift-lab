@@ -65,7 +65,7 @@
         - disk_write_complete_log is defined
         - disk_write_complete_log.rc == 0
 
-    - name: Disconnect Agent ISO from SNO VM after disk write
+    - name: Best-effort disconnect Agent ISO from SNO VM after disk write
       ansible.builtin.command:
         argv:
           - "{{ playbook_dir }}/../scripts/disconnect-vm-cdrom.py"
@@ -81,8 +81,9 @@
           - "{{ sno_vm_name }}"
           - --insecure
       register: disconnect_iso_result
-      changed_when: "'Disconnected' in disconnect_iso_result.stdout"
-      no_log: true
+      changed_when: "disconnect_iso_result.rc == 0 and 'Disconnected' in disconnect_iso_result.stdout"
+      failed_when: "(sno_iso_disconnect_fail_on_error | default(false) | bool) and disconnect_iso_result.rc != 0"
+      no_log: "{{ vcenter_no_log | default(false) | bool }}"
       delegate_to: localhost
       when:
         - sno_auto_disconnect_iso_after_disk_write | default(true) | bool
@@ -91,12 +92,15 @@
 
     - name: Show Agent ISO disconnect result
       ansible.builtin.debug:
-        msg: "Agent ISO disconnected from {{ sno_vm_name }} so the next boot uses the installed disk."
+        msg:
+          - "Agent ISO disconnect rc={{ disconnect_iso_result.rc | default('n/a') }}"
+          - "stdout: {{ disconnect_iso_result.stdout_lines | default([]) }}"
+          - "stderr: {{ disconnect_iso_result.stderr_lines | default([]) }}"
+          - "If vSphere reports 'Connection control operation failed for disk ide0:0', that is a hot-disconnect limitation for IDE CD-ROMs while the VM is running. The VM is already configured disk-first, so install can continue; detach the ISO after install or during next power-off."
       when:
         - disconnect_iso_result is defined
-        - disconnect_iso_result is changed
 
-    - name: Set VM boot order to disk first after ISO disconnect
+    - name: Set VM boot order to disk first after ISO disconnect attempt
       community.vmware.vmware_guest_boot_manager:
         hostname: "{{ vcenter_hostname }}"
         username: "{{ vcenter_username }}"
@@ -108,10 +112,11 @@
           - cdrom
         boot_delay: 5000
       delegate_to: localhost
+      failed_when: false
       when:
         - sno_set_boot_disk_first_after_iso_disconnect | default(true) | bool
-        - disconnect_iso_result is defined
-        - disconnect_iso_result is changed
+        - disk_write_complete_log is defined
+        - disk_write_complete_log.rc == 0
 
     - name: Wait for bootstrap wait process to finish
       ansible.builtin.async_status:

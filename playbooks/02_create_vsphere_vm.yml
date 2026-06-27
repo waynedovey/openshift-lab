@@ -584,16 +584,18 @@
           - "VM {{ sno_vm_name }} exists and ISO is attached as {{ iso_vsphere_path_effective }}"
           - "Expected disk.EnableUUID=TRUE. If vCenter still warns, power off the VM and rerun with sno_vm_recreate=true."
 
-    - name: Set VM boot order to CDROM first
+    - name: Set VM boot order to disk first with CD-ROM fallback
       community.vmware.vmware_guest_boot_manager:
         hostname: "{{ vcenter_hostname }}"
         username: "{{ vcenter_username }}"
         password: "{{ vcenter_password }}"
         validate_certs: "{{ validate_certs }}"
         name: "{{ sno_vm_name }}"
+        # Keep disk first. On a blank VM, EFI falls through to the Agent ISO.
+        # After RHCOS writes the disk and reboots, the VM boots from disk instead of looping back into the ISO.
         boot_order:
-          - cdrom
           - disk
+          - cdrom
         boot_delay: 5000
       delegate_to: localhost
 

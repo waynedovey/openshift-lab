@@ -95,3 +95,17 @@ A standalone helper is also available:
 ```bash
 ansible-playbook -i inventories/pod22/hosts.yml playbooks/03_disconnect_agent_iso.yml --ask-vault-pass
 ```
+
+## 2026-06-26 update: ISO boot loop prevention and second disk
+
+The VM is now configured with **disk-first, CD-ROM-fallback** boot order. On first boot, the empty disk is skipped and the Agent ISO boots. After RHCOS writes the disk and reboots, the VM should boot from disk instead of returning to the Agent ISO.
+
+`03_wait_install.yml` still attempts a best-effort CD-ROM disconnect after `Writing image to disk: 100%`, but the disconnect is no longer fatal. Some vSphere configurations expose the CD-ROM as `ide0:0`, which cannot be hot-disconnected while powered on and returns `Connection control operation failed for disk 'ide0:0'`.
+
+The SNO VM definition includes an optional second 300GB thin disk. For a running VM after install, use:
+
+```bash
+ansible-playbook -i inventories/pod22/hosts.yml playbooks/02_add_sno_extra_disk.yml --ask-vault-pass
+```
+
+The extra VMDK is only attached. It is not formatted, mounted, or claimed by OpenShift automatically.
