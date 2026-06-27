@@ -13,18 +13,40 @@ fi
 
 INV="inventories/pod22/hosts.yml"
 
-ansible-playbook -i "$INV" playbooks/00_preflight.yml --ask-vault-pass
-ansible-playbook -i "$INV" playbooks/04_configure_ad_dns.yml --ask-vault-pass
-ansible-playbook -i "$INV" playbooks/01_render_agent_iso.yml --ask-vault-pass
-ansible-playbook -i "$INV" playbooks/02_create_vsphere_vm.yml --ask-vault-pass
-ansible-playbook -i "$INV" playbooks/03_wait_install.yml --ask-vault-pass
+# Ask for the Ansible Vault password once, then reuse it for every playbook.
+# If ANSIBLE_VAULT_PASSWORD_FILE is already set, use that instead and do not prompt.
+if [[ -n "${ANSIBLE_VAULT_PASSWORD_FILE:-}" ]]; then
+  VAULT_ARGS=(--vault-password-file "$ANSIBLE_VAULT_PASSWORD_FILE")
+else
+  VAULT_PASSWORD_FILE_TMP="$(mktemp)"
+  chmod 600 "$VAULT_PASSWORD_FILE_TMP"
+  trap 'rm -f "$VAULT_PASSWORD_FILE_TMP"' EXIT
 
-ansible-playbook -i "$INV" playbooks/02_add_sno_extra_disk.yml --ask-vault-pass
-ansible-playbook -i "$INV" playbooks/05_install_lvm_storage.yml --ask-vault-pass
-ansible-playbook -i "$INV" playbooks/06_install_acm.yml --ask-vault-pass
-ansible-playbook -i "$INV" playbooks/07_configure_assisted_service.yml --ask-vault-pass
-ansible-playbook -i "$INV" playbooks/07_enable_baremetal_provisioning.yml --ask-vault-pass
-ansible-playbook -i "$INV" playbooks/10_configure_bm_ad_dns.yml --ask-vault-pass
-ansible-playbook -i "$INV" playbooks/05_idrac_preflight.yml --ask-vault-pass
-ansible-playbook -i "$INV" playbooks/08_apply_baremetal_cluster.yml --ask-vault-pass
-ansible-playbook -i "$INV" playbooks/09_wait_baremetal_cluster.yml --ask-vault-pass
+  read -r -s -p "Vault password: " VAULT_PASSWORD
+  echo
+  printf '%s\n' "$VAULT_PASSWORD" > "$VAULT_PASSWORD_FILE_TMP"
+  unset VAULT_PASSWORD
+
+  VAULT_ARGS=(--vault-password-file "$VAULT_PASSWORD_FILE_TMP")
+fi
+
+run_playbook() {
+  local playbook="$1"
+  ansible-playbook -i "$INV" "${VAULT_ARGS[@]}" "$playbook"
+}
+
+run_playbook playbooks/00_preflight.yml
+run_playbook playbooks/04_configure_ad_dns.yml
+run_playbook playbooks/01_render_agent_iso.yml
+run_playbook playbooks/02_create_vsphere_vm.yml
+run_playbook playbooks/03_wait_install.yml
+
+run_playbook playbooks/02_add_sno_extra_disk.yml
+run_playbook playbooks/05_install_lvm_storage.yml
+run_playbook playbooks/06_install_acm.yml
+run_playbook playbooks/07_configure_assisted_service.yml
+run_playbook playbooks/07_enable_baremetal_provisioning.yml
+run_playbook playbooks/10_configure_bm_ad_dns.yml
+run_playbook playbooks/05_idrac_preflight.yml
+run_playbook playbooks/08_apply_baremetal_cluster.yml
+run_playbook playbooks/09_wait_baremetal_cluster.yml
