@@ -385,6 +385,87 @@ bm_dns_records:
     type: A
     value: "{{ bm_ingress_vip }}"
 
+
+# ---------------------------------------------------------------------------
+# Site-B managed bare-metal cluster
+# ---------------------------------------------------------------------------
+# Site-B uses the remaining three Dell nodes as a compact 3-node OpenShift cluster.
+# IMPORTANT: b09-33 and b09-34 boot_mac values are placeholders until you run
+# playbooks/05_discover_site_b_idrac_nics.yml and choose the NIC cabled to VLAN 3522.
+site_b_cluster_name: site-b
+site_b_cluster_display_name: Site-B
+site_b_base_domain: poc.local
+site_b_fqdn: "{{ site_b_cluster_name }}.{{ site_b_base_domain }}"
+site_b_clusterset: site-b-baremetal
+
+site_b_machine_cidr: 10.23.22.0/24
+site_b_machine_cidr_prefix: 24
+site_b_gateway: 10.23.22.1
+site_b_dns_servers:
+  - 10.23.22.100
+site_b_api_vip: 10.23.22.130
+site_b_ingress_vip: 10.23.22.131
+
+site_b_cluster_network_cidr: 10.136.0.0/14
+site_b_cluster_network_host_prefix: 23
+site_b_service_network_cidr: 172.32.0.0/16
+site_b_network_type: OVNKubernetes
+
+site_b_control_plane_count: 3
+site_b_worker_count: 0
+site_b_pull_secret_name: pull-secret
+
+site_b_nodes:
+  - name: b08-36
+    hostname: b08-36
+    role: master
+    enabled: true
+    bmc_ip: 10.23.22.83
+    bmc_address: "redfish-virtualmedia://10.23.22.83{{ idrac_redfish_system_path }}"
+    boot_mac: "BC:97:E1:7E:98:D0"
+    ip: 10.23.22.113
+    primary_interface: eno33np0
+    secondary_interface: eno34np1
+    secondary_mac: ""
+    idrac_firmware_expected: "7.30.10.50"
+  - name: b09-33
+    hostname: b09-33
+    role: master
+    enabled: true
+    bmc_ip: 10.23.22.84
+    bmc_address: "redfish-virtualmedia://10.23.22.84{{ idrac_redfish_system_path }}"
+    boot_mac: "CHANGE_ME_B09_33_BOOT_NIC_MAC"
+    ip: 10.23.22.114
+    primary_interface: eno33np0
+    secondary_interface: eno34np1
+    secondary_mac: ""
+    idrac_firmware_expected: "7.30.10.50"
+  - name: b09-34
+    hostname: b09-34
+    role: master
+    enabled: true
+    bmc_ip: 10.23.22.85
+    bmc_address: "redfish-virtualmedia://10.23.22.85{{ idrac_redfish_system_path }}"
+    boot_mac: "CHANGE_ME_B09_34_BOOT_NIC_MAC"
+    ip: 10.23.22.115
+    primary_interface: eno33np0
+    secondary_interface: eno34np1
+    secondary_mac: ""
+    idrac_firmware_expected: "7.30.10.50"
+
+site_b_dns_records:
+  - name: "api.{{ site_b_cluster_name }}"
+    type: A
+    value: "{{ site_b_api_vip }}"
+  - name: "api-int.{{ site_b_cluster_name }}"
+    type: A
+    value: "{{ site_b_api_vip }}"
+  - name: "*.apps.{{ site_b_cluster_name }}"
+    type: A
+    value: "{{ site_b_ingress_vip }}"
+
+site_b_rendered_dir: "{{ build_root }}/baremetal/{{ site_b_cluster_name }}"
+
 # Rendered manifest locations
 acm_rendered_dir: "{{ build_root }}/acm"
 bm_rendered_dir: "{{ build_root }}/baremetal/{{ bm_cluster_name }}"

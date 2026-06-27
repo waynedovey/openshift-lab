@@ -6,7 +6,7 @@
     KUBECONFIG: "{{ hub_kubeconfig }}"
   tasks:
 
-    - name: Wait for ACM/Hive/Assisted/BareMetal CRDs used by Site-A
+    - name: Wait for ACM/Hive/Assisted/BareMetal CRDs used by {{ bm_cluster_display_name | default(bm_cluster_name) }}
       ansible.builtin.command: "oc get crd {{ item }}"
       register: required_crd
       changed_when: false
@@ -23,7 +23,7 @@
         - managedclusters.cluster.open-cluster-management.io
         - klusterletaddonconfigs.agent.open-cluster-management.io
 
-    - name: Show Site-A bare-metal node plan
+    - name: Show {{ bm_cluster_display_name | default(bm_cluster_name) }} bare-metal node plan
       ansible.builtin.debug:
         msg:
           - "Cluster: {{ bm_cluster_name }} / display {{ bm_cluster_display_name | default(bm_cluster_name) }}"

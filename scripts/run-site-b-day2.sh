@@ -35,25 +35,8 @@ run_playbook() {
   ansible-playbook -i "$INV" "${VAULT_ARGS[@]}" "$playbook"
 }
 
-run_playbook playbooks/00_preflight.yml
-run_playbook playbooks/04_configure_ad_dns.yml
-run_playbook playbooks/01_render_agent_iso.yml
-run_playbook playbooks/02_create_vsphere_vm.yml
-run_playbook playbooks/03_wait_install.yml
-
-run_playbook playbooks/02_add_sno_extra_disk.yml
-run_playbook playbooks/05_install_lvm_storage.yml
-run_playbook playbooks/06_install_acm.yml
-run_playbook playbooks/07_configure_assisted_service.yml
-run_playbook playbooks/07_enable_baremetal_provisioning.yml
-# Site-A
-run_playbook playbooks/10_configure_bm_ad_dns.yml
-run_playbook playbooks/05_idrac_preflight.yml
-run_playbook playbooks/08_apply_baremetal_cluster.yml
-run_playbook playbooks/09_wait_baremetal_cluster.yml
-
-# Site-B
 run_playbook playbooks/10_configure_site_b_ad_dns.yml
 run_playbook playbooks/05_idrac_preflight_site_b.yml
+run_playbook playbooks/05_discover_site_b_idrac_nics.yml
 run_playbook playbooks/08_apply_site_b_baremetal_cluster.yml
 run_playbook playbooks/09_wait_site_b_baremetal_cluster.yml

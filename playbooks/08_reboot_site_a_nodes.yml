@@ -1,5 +1,5 @@
 ---
-- name: Restart enabled Site-A bare-metal nodes through iDRAC Redfish
+- name: Restart enabled {{ bm_cluster_display_name | default(bm_cluster_name) }} bare-metal nodes through iDRAC Redfish
   hosts: ansible_controller
   gather_facts: false
   vars:
@@ -11,7 +11,7 @@
       loop: "{{ bm_nodes }}"
       when: item.enabled | default(true)
 
-    - name: Read current power state for enabled Site-A nodes
+    - name: Read current power state for enabled {{ bm_cluster_display_name | default(bm_cluster_name) }} nodes
       ansible.builtin.uri:
         url: "https://{{ item.bmc_ip }}{{ idrac_redfish_system_path }}"
         method: GET
@@ -28,7 +28,7 @@
       loop: "{{ bm_nodes }}"
       when: item.enabled | default(true)
 
-    - name: Show current power state for enabled Site-A nodes
+    - name: Show current power state for enabled {{ bm_cluster_display_name | default(bm_cluster_name) }} nodes
       ansible.builtin.debug:
         msg: >-
           {{ item.item.name }} current PowerState={{ item.json.PowerState | default('unknown') }}
@@ -37,7 +37,7 @@
       when:
         - item.item.enabled | default(true)
 
-    - name: Try Redfish ForceRestart for enabled Site-A nodes
+    - name: Try Redfish ForceRestart for enabled {{ bm_cluster_display_name | default(bm_cluster_name) }} nodes
       ansible.builtin.uri:
         url: "https://{{ item.bmc_ip }}{{ idrac_redfish_system_path }}/Actions/ComputerSystem.Reset"
         method: POST
@@ -140,7 +140,7 @@
         - item.item is defined
         - item.item.item is defined
 
-    - name: Read final power state for enabled Site-A nodes
+    - name: Read final power state for enabled {{ bm_cluster_display_name | default(bm_cluster_name) }} nodes
       ansible.builtin.uri:
         url: "https://{{ item.bmc_ip }}{{ idrac_redfish_system_path }}"
         method: GET
@@ -157,7 +157,7 @@
       loop: "{{ bm_nodes }}"
       when: item.enabled | default(true)
 
-    - name: Show final power state for enabled Site-A nodes
+    - name: Show final power state for enabled {{ bm_cluster_display_name | default(bm_cluster_name) }} nodes
       ansible.builtin.debug:
         msg: >-
           {{ item.item.name }} final PowerState={{ item.json.PowerState | default('unknown') }}
@@ -168,4 +168,4 @@
 
     - name: Show reboot command completed
       ansible.builtin.debug:
-        msg: "Restart commands processed for enabled Site-A nodes. Watch: oc -n {{ bm_cluster_name }} get bmh,agent -w"
+        msg: "Restart commands processed for enabled {{ bm_cluster_display_name | default(bm_cluster_name) }} nodes. Watch: oc -n {{ bm_cluster_name }} get bmh,agent -w"
