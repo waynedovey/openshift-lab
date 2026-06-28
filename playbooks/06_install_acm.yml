@@ -24,23 +24,76 @@
 
     - name: Apply ACM namespace, OperatorGroup, and Subscription
       ansible.builtin.command: "oc apply -f {{ acm_rendered_dir }}/{{ item }}"
-      changed_when: true
+      changed_when: "'created' in acm_apply.stdout or 'configured' in acm_apply.stdout"
+      register: acm_apply
       loop:
         - 00-namespace.yaml
         - 01-operatorgroup.yaml
         - 02-subscription.yaml
 
+    - name: Wait for ACM Subscription to exist
+      ansible.builtin.command: "oc -n {{ acm_namespace }} get subscription advanced-cluster-management"
+      register: acm_subscription
+      changed_when: false
+      failed_when: false
+      retries: 40
+      delay: 15
+      until: acm_subscription.rc == 0
+
     - name: Wait for MultiClusterHub CRD to appear
       ansible.builtin.command: oc get crd multiclusterhubs.operator.open-cluster-management.io
       register: mch_crd
       changed_when: false
+      failed_when: false
       retries: 80
       delay: 15
       until: mch_crd.rc == 0
 
+    - name: Check whether MultiClusterHub already exists
+      ansible.builtin.command: >-
+        oc -n {{ acm_namespace }} get multiclusterhub {{ acm_multiclusterhub_name }}
+        -o jsonpath='{.status.phase}'
+      register: existing_mch
+      changed_when: false
+      failed_when: false
+
+    - name: Print existing MultiClusterHub state when present
+      ansible.builtin.debug:
+        msg: "Existing MultiClusterHub phase={{ existing_mch.stdout | default('unknown') }}. Skipping create and waiting for Running."
+      when: existing_mch.rc == 0
+
+    - name: Wait for ACM validating webhook service endpoints before creating MultiClusterHub
+      ansible.builtin.command: >-
+        oc -n {{ acm_namespace }} get endpoints multiclusterhub-operator-webhook
+        -o jsonpath='{.subsets[*].addresses[*].ip}'
+      register: mch_webhook_endpoints
+      changed_when: false
+      failed_when: false
+      retries: 60
+      delay: 10
+      until:
+        - mch_webhook_endpoints.rc == 0
+        - mch_webhook_endpoints.stdout | length > 0
+      when: existing_mch.rc != 0
+
     - name: Create MultiClusterHub
       ansible.builtin.command: "oc apply -f {{ acm_rendered_dir }}/03-multiclusterhub.yaml"
-      changed_when: true
+      register: create_mch
+      changed_when: "'created' in create_mch.stdout or 'configured' in create_mch.stdout"
+      failed_when: false
+      retries: 30
+      delay: 10
+      until: create_mch.rc == 0
+      when: existing_mch.rc != 0
+
+    - name: Show MultiClusterHub create output if retries were needed
+      ansible.builtin.debug:
+        var: create_mch.stderr_lines
+      when:
+        - existing_mch.rc != 0
+        - create_mch is defined
+        - create_mch.rc is defined
+        - create_mch.rc != 0
 
     - name: Wait for MultiClusterHub to report Running
       ansible.builtin.command: >-
@@ -48,9 +101,10 @@
         -o jsonpath='{.status.phase}'
       register: mch_phase
       changed_when: false
+      failed_when: false
       retries: 120
       delay: 30
-      until: mch_phase.stdout == 'Running'
+      until: mch_phase.rc == 0 and mch_phase.stdout == 'Running'
 
     - name: Show ACM hub state
       ansible.builtin.command: "oc -n {{ acm_namespace }} get mch {{ acm_multiclusterhub_name }}"

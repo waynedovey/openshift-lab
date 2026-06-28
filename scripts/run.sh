@@ -12,6 +12,7 @@ else
 fi
 
 INV="inventories/pod22/hosts.yml"
+HUB_KUBECONFIG="$PWD/build/hub-sno/install/auth/kubeconfig"
 
 # Ask for the Ansible Vault password once, then reuse it for every playbook.
 # If ANSIBLE_VAULT_PASSWORD_FILE is already set, use that instead and do not prompt.
@@ -35,7 +36,20 @@ run_playbook() {
   ansible-playbook -i "$INV" "${VAULT_ARGS[@]}" "$playbook"
 }
 
+hub_is_up() {
+  [[ -f "$HUB_KUBECONFIG" ]] || return 1
+  timeout 15 oc --kubeconfig "$HUB_KUBECONFIG" get clusterversion version >/dev/null 2>&1 || return 1
+  timeout 15 oc --kubeconfig "$HUB_KUBECONFIG" get nodes >/dev/null 2>&1 || return 1
+}
+
 run_playbook playbooks/00_preflight.yml
-run_playbook playbooks/01_render_agent_iso.yml
-run_playbook playbooks/02_create_vsphere_vm.yml
-run_playbook playbooks/03_wait_install.yml
+run_playbook playbooks/04_configure_ad_dns.yml
+
+if [[ "${FORCE_REBUILD_HUB:-false}" != "true" ]] && hub_is_up; then
+  echo "Hub SNO is already reachable and running. Skipping ISO render, VM create/update, and install wait."
+  echo "Set FORCE_REBUILD_HUB=true to force a rebuild."
+else
+  run_playbook playbooks/01_render_agent_iso.yml
+  run_playbook playbooks/02_create_vsphere_vm.yml
+  run_playbook playbooks/03_wait_install.yml
+fi

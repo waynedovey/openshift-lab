@@ -12,6 +12,7 @@ else
 fi
 
 INV="inventories/pod22/hosts.yml"
+HUB_KUBECONFIG="$PWD/build/hub-sno/install/auth/kubeconfig"
 
 # Ask for the Ansible Vault password once, then reuse it for every playbook.
 # If ANSIBLE_VAULT_PASSWORD_FILE is already set, use that instead and do not prompt.
@@ -35,6 +36,18 @@ run_playbook() {
   ansible-playbook -i "$INV" "${VAULT_ARGS[@]}" "$playbook"
 }
 
+hub_is_up() {
+  [[ -f "$HUB_KUBECONFIG" ]] || return 1
+  timeout 15 oc --kubeconfig "$HUB_KUBECONFIG" get clusterversion version >/dev/null 2>&1 || return 1
+  timeout 15 oc --kubeconfig "$HUB_KUBECONFIG" get nodes >/dev/null 2>&1 || return 1
+}
+
+if ! hub_is_up; then
+  echo "Hub SNO is not reachable yet. Run ./scripts/run.sh first, then rerun this script." >&2
+  exit 1
+fi
+
+# Hub day-2. These playbooks are idempotent and can safely be rerun.
 run_playbook playbooks/02_add_sno_extra_disk.yml
 run_playbook playbooks/05_install_lvm_storage.yml
 run_playbook playbooks/04_configure_ad_dns.yml
@@ -42,6 +55,8 @@ run_playbook playbooks/06_install_acm.yml
 run_playbook playbooks/07_configure_assisted_service.yml
 run_playbook playbooks/07_enable_baremetal_provisioning.yml
 run_playbook playbooks/07_validate_assisted_image_service.yml
+
+# Site-A provisioning.
 run_playbook playbooks/10_configure_bm_ad_dns.yml
 run_playbook playbooks/05_idrac_preflight.yml
 run_playbook playbooks/05_discover_idrac_nics.yml
