@@ -251,6 +251,7 @@
           - name: "{{ vm_network_eth0 }}"
             device_type: vmxnet3
             mac: "{{ sno_node.mac_eth0 }}"
+            connected: true
             start_connected: true
         secondary_sno_vm_network: >-
           {{
@@ -259,6 +260,7 @@
                 'name': vm_network_eth1,
                 'device_type': 'vmxnet3',
                 'mac': sno_node.mac_eth1,
+                'connected': true,
                 'start_connected': true
               }
             ]
@@ -570,6 +572,91 @@
         wait_for_ip_address: false
       delegate_to: localhost
 
+    # vmware_guest has separate "connected" and "start_connected" flags.  We
+    # explicitly enforce both here because an existing VM can retain a NIC that
+    # is present but currently disconnected even when Connect At Power On is set.
+    - name: Force primary SNO vNIC connected now and at power on
+      community.vmware.vmware_guest_network:
+        hostname: "{{ vcenter_hostname }}"
+        username: "{{ vcenter_username }}"
+        password: "{{ vcenter_password }}"
+        validate_certs: "{{ validate_certs }}"
+        datacenter: "{{ vsphere_datacenter }}"
+        name: "{{ sno_vm_name }}"
+        mac_address: "{{ sno_node.mac_eth0 }}"
+        network_name: "{{ vm_network_eth0 }}"
+        device_type: vmxnet3
+        connected: true
+        start_connected: true
+        state: present
+      delegate_to: localhost
+
+    - name: Force optional secondary SNO vNIC connected now and at power on
+      community.vmware.vmware_guest_network:
+        hostname: "{{ vcenter_hostname }}"
+        username: "{{ vcenter_username }}"
+        password: "{{ vcenter_password }}"
+        validate_certs: "{{ validate_certs }}"
+        datacenter: "{{ vsphere_datacenter }}"
+        name: "{{ sno_vm_name }}"
+        mac_address: "{{ sno_node.mac_eth1 }}"
+        network_name: "{{ vm_network_eth1 }}"
+        device_type: vmxnet3
+        connected: true
+        start_connected: true
+        state: present
+      when: sno_node.secondary_nic_enabled | default(false) | bool
+      delegate_to: localhost
+
+    - name: Read SNO vNIC state from vCenter
+      community.vmware.vmware_guest_network:
+        hostname: "{{ vcenter_hostname }}"
+        username: "{{ vcenter_username }}"
+        password: "{{ vcenter_password }}"
+        validate_certs: "{{ validate_certs }}"
+        datacenter: "{{ vsphere_datacenter }}"
+        name: "{{ sno_vm_name }}"
+        gather_network_info: true
+      register: sno_vm_network_state
+      delegate_to: localhost
+
+    - name: Reset selected primary SNO vNIC state
+      ansible.builtin.set_fact:
+        sno_primary_vnic_state: {}
+
+    - name: Locate primary SNO vNIC by MAC ignoring case
+      ansible.builtin.set_fact:
+        sno_primary_vnic_state: "{{ item }}"
+      loop: "{{ sno_vm_network_state.network_info | default([]) }}"
+      loop_control:
+        label: "{{ item.mac_address | default('unknown-mac') }} / {{ item.network_name | default('unknown-network') }}"
+      when:
+        - item.mac_address is defined
+        - (item.mac_address | lower) == (sno_node.mac_eth0 | lower)
+
+    # IMPORTANT: vCenter reports connectable.connected=false while a VM is
+    # powered off. That is runtime state, not a configuration error.  The flag
+    # that matters before boot is start_connected=true.  Checking `connected`
+    # here caused v3 to stop every clean powered-off build before it could boot.
+    - name: Refuse to boot if primary SNO vNIC is not configured to connect at power on
+      ansible.builtin.assert:
+        that:
+          - sno_primary_vnic_state | length > 0
+          - sno_primary_vnic_state.start_connected | default(false) | bool
+          - (sno_primary_vnic_state.mac_address | default('') | lower) == (sno_node.mac_eth0 | lower)
+          - sno_primary_vnic_state.network_name | default('') == vm_network_eth0
+        fail_msg: >-
+          The SNO primary VMware NIC is not configured correctly for boot.
+          vCenter reported: {{ sno_primary_vnic_state }}. The NIC must exist on
+          {{ vm_network_eth0 }} with MAC {{ sno_node.mac_eth0 }} and Connect At
+          Power On enabled. Note that connected=false is normal while the VM is
+          powered off and is deliberately not treated as a pre-boot failure.
+        success_msg: >-
+          Primary SNO vNIC {{ sno_node.mac_eth0 }} is attached to {{ vm_network_eth0 }}
+          and Connect At Power On is enabled. Current runtime connected state is
+          {{ sno_primary_vnic_state.connected | default(false) }}; false is expected
+          while the VM is powered off.
+
     - name: Force disk.EnableUUID advanced setting with pyVmomi
       ansible.builtin.command:
         argv:
@@ -639,3 +726,88 @@
         name: "{{ sno_vm_name }}"
         state: powered-on
       delegate_to: localhost
+
+    # Once the VM is powered on, `connected` becomes meaningful.  Explicitly
+    # connect the vNIC again after power-on so an existing VM cannot retain a
+    # stale runtime-disconnected state even when start_connected=true.
+    - name: Force primary SNO vNIC connected after VM power on
+      community.vmware.vmware_guest_network:
+        hostname: "{{ vcenter_hostname }}"
+        username: "{{ vcenter_username }}"
+        password: "{{ vcenter_password }}"
+        validate_certs: "{{ validate_certs }}"
+        datacenter: "{{ vsphere_datacenter }}"
+        name: "{{ sno_vm_name }}"
+        mac_address: "{{ sno_node.mac_eth0 }}"
+        network_name: "{{ vm_network_eth0 }}"
+        device_type: vmxnet3
+        connected: true
+        start_connected: true
+        state: present
+      delegate_to: localhost
+
+    - name: Force optional secondary SNO vNIC connected after VM power on
+      community.vmware.vmware_guest_network:
+        hostname: "{{ vcenter_hostname }}"
+        username: "{{ vcenter_username }}"
+        password: "{{ vcenter_password }}"
+        validate_certs: "{{ validate_certs }}"
+        datacenter: "{{ vsphere_datacenter }}"
+        name: "{{ sno_vm_name }}"
+        mac_address: "{{ sno_node.mac_eth1 }}"
+        network_name: "{{ vm_network_eth1 }}"
+        device_type: vmxnet3
+        connected: true
+        start_connected: true
+        state: present
+      when: sno_node.secondary_nic_enabled | default(false) | bool
+      delegate_to: localhost
+
+    - name: Read SNO vNIC state after VM power on
+      community.vmware.vmware_guest_network:
+        hostname: "{{ vcenter_hostname }}"
+        username: "{{ vcenter_username }}"
+        password: "{{ vcenter_password }}"
+        validate_certs: "{{ validate_certs }}"
+        datacenter: "{{ vsphere_datacenter }}"
+        name: "{{ sno_vm_name }}"
+        gather_network_info: true
+      register: sno_vm_network_state_after_poweron
+      delegate_to: localhost
+
+    - name: Reset powered-on primary SNO vNIC state
+      ansible.builtin.set_fact:
+        sno_primary_vnic_state_after_poweron: {}
+
+    - name: Locate powered-on primary SNO vNIC by MAC ignoring case
+      ansible.builtin.set_fact:
+        sno_primary_vnic_state_after_poweron: "{{ item }}"
+      loop: "{{ sno_vm_network_state_after_poweron.network_info | default([]) }}"
+      loop_control:
+        label: "{{ item.mac_address | default('unknown-mac') }} / {{ item.network_name | default('unknown-network') }}"
+      when:
+        - item.mac_address is defined
+        - (item.mac_address | lower) == (sno_node.mac_eth0 | lower)
+
+    - name: Refuse to continue if primary SNO vNIC is disconnected after power on
+      ansible.builtin.assert:
+        that:
+          - sno_primary_vnic_state_after_poweron | length > 0
+          - sno_primary_vnic_state_after_poweron.connected | default(false) | bool
+          - sno_primary_vnic_state_after_poweron.start_connected | default(false) | bool
+          - (sno_primary_vnic_state_after_poweron.mac_address | default('') | lower) == (sno_node.mac_eth0 | lower)
+          - sno_primary_vnic_state_after_poweron.network_name | default('') == vm_network_eth0
+        fail_msg: >-
+          The SNO VM is powered on but its primary VMware NIC is still disconnected.
+          vCenter reported: {{ sno_primary_vnic_state_after_poweron }}. Check the
+          {{ vm_network_eth0 }} port group / distributed switch and VM NIC backing.
+        success_msg: >-
+          Primary SNO vNIC {{ sno_node.mac_eth0 }} is CONNECTED after power on,
+          Connect At Power On is enabled, and it is attached to {{ vm_network_eth0 }}.
+
+    - name: Show SNO boot network handoff
+      ansible.builtin.debug:
+        msg:
+          - "VMware vNIC runtime state: connected={{ sno_primary_vnic_state_after_poweron.connected | default(false) }}, start_connected={{ sno_primary_vnic_state_after_poweron.start_connected | default(false) }}"
+          - "Agent ISO will map logical {{ sno_node.primary_logical_interface }} -> MAC {{ sno_node.mac_eth0 }} -> kernel NIC name chosen by RHCOS."
+          - "Expected SNO network after Agent pre-network-manager-config: {{ sno_node.ip }}/{{ machine_cidr_prefix }} via {{ gateway }}."

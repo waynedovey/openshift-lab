@@ -6,7 +6,8 @@ The VMware SNO hub is now configured for a single VM NIC by default. Only `vm_ne
 
 ```yaml
 sno_node:
-  primary_interface: ens192
+  primary_profile: primary
+  mac_eth0: "00:50:56:23:74:90"
   secondary_nic_enabled: false
 
 vm_network_eth0: "{{ discovered_port_group_name }}"
@@ -24,7 +25,7 @@ The pattern is:
 2. Generate an OpenShift `agent.iso` that contains the static network configuration for the SNO hub.
 3. Upload the ISO to a vSphere datastore.
 4. Create a vSphere VM with one NIC:
-   - `eth0` / `ens192` on the VLAN {{ machine_vlan_id }} machine-network port group
+   - one vNIC on the VLAN {{ machine_vlan_id }} machine-network port group; RHCOS device naming is ignored because Nmstate matches it by MAC
 5. Attach the ISO, boot the VM, and wait for the OpenShift SNO install to complete.
 6. Install ACM on the SNO hub.
 7. Configure Assisted Service storage on the hub.
@@ -299,10 +300,11 @@ This package has the VMware SNO hub fixed for your current design:
 
 ```yaml
 sno_node:
-  primary_interface: ens192
+  primary_profile: primary
+  mac_eth0: "00:50:56:23:74:90"
   secondary_nic_enabled: false
   mac_eth1: ""
-  secondary_interface: ""
+  secondary_profile: secondary
 
 vm_network_eth0: "{{ discovered_port_group_name }}"
 vm_network_eth1: ""
@@ -724,7 +726,7 @@ The playbooks now include early vSphere inventory validation so the error shows 
 The VMware SNO hub uses one vSphere NIC by default:
 
 ```text
-{{ cluster_name }} ens192 -> vm_network_eth0 -> {{ vm_network_eth0 }} / machine network
+{{ cluster_name }} vNIC (matched by MAC as profile `primary`) -> vm_network_eth0 -> {{ vm_network_eth0 }} / machine network
 ```
 
 `vm_network_eth1` is intentionally blank and `sno_node.secondary_nic_enabled` is `false`.

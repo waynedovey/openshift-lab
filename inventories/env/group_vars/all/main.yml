@@ -44,23 +44,29 @@ machine_vlan_id: 3574
 secondary_vlan_id: 574
 
 # Ubuntu/Ansible controller used to run the lab automation.
-bastion_hostname: POD-74-VM-03
-bastion_ip: 10.23.74.12
+bastion_hostname: POD-74-VM-02
+bastion_ip: 10.23.74.232
 
 sno_node:
   hostname: "{{ cluster_name }}-0"
   fqdn: "{{ sno_node.hostname }}.{{ cluster_fqdn }}"
   ip: 10.23.74.90
-  # These are VMware VM NIC MACs, not iDRAC MACs.
-  # Keep them unique and make sure vCenter accepts the chosen static MAC range.
-  mac_eth0: "00:50:56:23:74:90"
-  primary_interface: ens192
 
-  # Secondary NIC is disabled by default for the SNO hub.
-  # Do not configure the secondary VLAN for the SNO VM. The hub only needs machine_vlan_id.
+  # IMPORTANT: this is a LOGICAL Agent Installer interface name, not a Linux
+  # kernel device name. The same logical name is used in hosts.interfaces and
+  # networkConfig, while mac_eth0 identifies the physical VM NIC. The Agent
+  # boot-time pre-network-manager-config service rewrites the logical name to
+  # the actual kernel name (ens33, ens192, eno1, etc.) before NetworkManager.
+  #
+  # Do not replace this with an environment-specific Linux device name.
+  primary_logical_interface: eth0
+  mac_eth0: "00:50:56:23:74:90"
+
+  # Secondary NIC is disabled by default for the SNO hub. If enabled later,
+  # use another logical name and MAC; the Agent performs the same mapping.
   secondary_nic_enabled: false
+  secondary_logical_interface: eth1
   mac_eth1: ""
-  secondary_interface: ""
 
 # VIPs are only used when sno_install_platform is "vsphere".
 # With platform none/SNO, DNS should point api/api-int/apps to the SNO node IP.

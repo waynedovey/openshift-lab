@@ -44,23 +44,21 @@ machine_vlan_id: 3574
 secondary_vlan_id: 574
 
 # Ubuntu/Ansible controller used to run the lab automation.
-bastion_hostname: POD-74-VM-03
-bastion_ip: 10.23.74.12
+bastion_hostname: POD-74-VM-02
+bastion_ip: 10.23.74.232
 
 sno_node:
   hostname: "{{ cluster_name }}-0"
   fqdn: "{{ sno_node.hostname }}.{{ cluster_fqdn }}"
   ip: 10.23.74.90
-  # These are VMware VM NIC MACs, not iDRAC MACs.
-  # Keep them unique and make sure vCenter accepts the chosen static MAC range.
-  mac_eth0: "00:50:56:23:74:90"
-  primary_interface: ens192
 
-  # Secondary NIC is disabled by default for the SNO hub.
-  # Do not configure the secondary VLAN for the SNO VM. The hub only needs machine_vlan_id.
+  # Match the SNO vNIC by MAC, not by a Linux device name such as ens33/ens192.
+  primary_profile: primary
+  mac_eth0: "00:50:56:23:74:90"
+
   secondary_nic_enabled: false
+  secondary_profile: secondary
   mac_eth1: ""
-  secondary_interface: ""
 
 # VIPs are only used when sno_install_platform is "vsphere".
 # With platform none/SNO, DNS should point api/api-int/apps to the SNO node IP.
@@ -84,10 +82,10 @@ vcenter_password: "{{ vault_vcenter_password }}"
 validate_certs: false
 
 # The workbook provides the vCenter and ESXi IPs but not the vCenter object names.
-# CompanyA / Resources / datastore1 / MGMT are retained assumptions and must be
+# Company-A / Resources / datastore1 / MGMT are retained assumptions and must be
 # verified with playbooks/00_discover_vsphere_inventory.yml before VM creation.
 # This starter creates the VM on the standalone ESXi host through vCenter.
-vsphere_datacenter: CompanyA
+vsphere_datacenter: Company-A
 vsphere_esxi_hostname: 10.23.74.11
 vsphere_resource_pool: Resources
 vsphere_folder: "/{{ vsphere_datacenter }}/vm"

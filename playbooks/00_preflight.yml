@@ -15,7 +15,7 @@
           - sno_node is defined
           - sno_node.ip is defined
           - sno_node.mac_eth0 is defined
-          - sno_node.primary_interface is defined
+          - sno_node.primary_logical_interface is defined
           - vcenter_hostname is defined
           - vcenter_username is defined
           - vcenter_password is defined
@@ -30,6 +30,41 @@
           Required variables are missing. Check that Ansible is loading
           inventories/env/group_vars/all/main.yml and the encrypted
           inventories/env/group_vars/all/vault.yml file.
+
+    - name: Validate SNO MAC-based interface identity
+      ansible.builtin.assert:
+        that:
+          - sno_node.primary_logical_interface | string | length > 0
+          - sno_node.mac_eth0 is match('^(?i:[0-9a-f]{2}:){5}[0-9a-f]{2}$')
+          - gateway is defined
+          - default_ipv4_route_cidr is defined
+          - default_ipv4_route_cidr == '0.0.0.0/0'
+          - not (sno_node.secondary_nic_enabled | default(false) | bool) or (sno_node.secondary_logical_interface | default('') | length > 0)
+          - not (sno_node.secondary_nic_enabled | default(false) | bool) or ((sno_node.mac_eth1 | default('')) is match('^(?i:[0-9a-f]{2}:){5}[0-9a-f]{2}$'))
+          - not (sno_node.secondary_nic_enabled | default(false) | bool) or (sno_node.secondary_logical_interface != sno_node.primary_logical_interface)
+        fail_msg: >-
+          SNO network identity is invalid. The Agent network must use a stable logical
+          interface name plus a valid VMware MAC address; do not configure ens33/ens192-style
+          kernel interface names. Check sno_node.primary_logical_interface, sno_node.mac_eth0,
+          gateway, and (if enabled) the secondary NIC values.
+
+    - name: Reject physical Linux device names in Agent logical interface settings
+      ansible.builtin.assert:
+        that:
+          - sno_node.primary_logical_interface not in ['ens33', 'ens192']
+          - not (sno_node.primary_logical_interface is match('^en[opsx][0-9].*'))
+        fail_msg: >-
+          primary_logical_interface must be a stable logical Agent name such as eth0,
+          not an environment-specific Linux kernel name such as ens33 or ens192.
+
+    - name: Show SNO Agent logical-to-MAC network identity
+      ansible.builtin.debug:
+        msg:
+          - "Primary Agent logical interface: {{ sno_node.primary_logical_interface }}"
+          - "Primary VM NIC MAC: {{ sno_node.mac_eth0 }}"
+          - "Static IP: {{ sno_node.ip }}/{{ machine_cidr_prefix }}"
+          - "Default route: {{ default_ipv4_route_cidr }} via {{ gateway }} using logical interface {{ sno_node.primary_logical_interface }}"
+          - "At boot the Agent maps {{ sno_node.primary_logical_interface }} -> the real NIC by MAC, so ens33/ens192/etc. do not need to be known in advance."
 
     - name: Validate optional vSphere platform variables
       ansible.builtin.assert:
@@ -116,6 +151,16 @@
           One or more configured vSphere inventory names do not exist exactly as written.
           Run playbooks/00_discover_vsphere_inventory.yml and update
           inventories/env/group_vars/all/main.yml. For this SNO hub, only vm_network_eth0 is required.
+
+    - name: Validate configured ESXi host exists when host discovery returned names
+      ansible.builtin.assert:
+        that:
+          - vsphere_esxi_hostname in (vsphere_inventory.hosts | map(attribute='name') | list)
+        fail_msg: >-
+          vsphere_esxi_hostname={{ vsphere_esxi_hostname }} does not exactly match a host name
+          registered in vCenter. Discovered hosts: {{ vsphere_inventory.hosts | map(attribute='name') | list }}.
+          Set vsphere_esxi_hostname to the exact vCenter inventory name (often an FQDN).
+      when: (vsphere_inventory.hosts | default([]) | length) > 0
 
     - name: Validate optional secondary vSphere inventory name exists
       ansible.builtin.assert:
@@ -280,7 +325,8 @@
           - "(sno_node.ip | ansible.utils.ipaddr(machine_cidr)) != false"
           - "(sno_api_ip | ansible.utils.ipaddr(machine_cidr)) != false"
           - "(sno_ingress_ip | ansible.utils.ipaddr(machine_cidr)) != false"
-        fail_msg: "SNO node IP, API DNS target, and Ingress DNS target must be inside {{ machine_cidr }}."
+          - "(gateway | ansible.utils.ipaddr(machine_cidr)) != false"
+        fail_msg: "SNO node IP, API DNS target, Ingress DNS target, and gateway must be inside {{ machine_cidr }}."
 
     - name: Check vCenter API is reachable
       community.vmware.vmware_datacenter_info:

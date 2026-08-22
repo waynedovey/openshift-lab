@@ -4,7 +4,9 @@
 
 | VM NIC | Linux name | Port group | VLAN | Mode |
 |---|---|---|---|---|
-| NIC 1 | ens192 | {{ vm_network_eth0 }} | 3574 | Access |
+| NIC 1 | MAC-matched (`primary` profile) | {{ vm_network_eth0 }} | 3574 | Access |
+
+The Linux kernel device name is intentionally not configured. Nmstate identifies NIC 1 by `sno_node.mac_eth0`, so the same configuration works whether RHCOS calls the device `ens33`, `ens192`, `eno1`, or something else.
 
 ## IP plan
 

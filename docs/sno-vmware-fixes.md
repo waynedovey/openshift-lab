@@ -8,14 +8,17 @@ The SNO hub VM uses one NIC only:
 
 ```yaml
 sno_node:
-  primary_interface: ens192
+  primary_profile: primary
+  mac_eth0: "00:50:56:23:74:90"
   secondary_nic_enabled: false
+  secondary_profile: secondary
   mac_eth1: ""
-  secondary_interface: ""
 
 vm_network_eth0: "{{ discovered_port_group_name }}"
 vm_network_eth1: ""
 ```
+
+The AgentConfig uses `identifier: mac-address`, so `primary` is a logical Nmstate profile rather than a Linux device name. Do not hard-code `ens33`, `ens192`, or similar names.
 
 Do not attach VLAN {{ secondary_vlan_id }} to the SNO hub. VLAN {{ secondary_vlan_id }} can be used later for other lab hosts or workloads, but the hub itself only needs the {{ vm_network_eth0 }} machine network.
 
@@ -28,6 +31,21 @@ disk.EnableUUID = TRUE
 ```
 
 This is done with `scripts/set-vm-advanced-setting.py` through pyVmomi after the VM is created or updated.
+
+## Default gateway and portable NIC identity
+
+The generated AgentConfig includes an explicit IPv4 default route:
+
+```yaml
+routes:
+  config:
+    - destination: 0.0.0.0/0
+      next-hop-address: "{{ gateway }}"
+      next-hop-interface: primary
+      table-id: 254
+```
+
+The route points at the logical `primary` profile. Nmstate resolves that profile to the physical vNIC using `sno_node.mac_eth0`. This prevents the missing-gateway failure that occurs when a route points at a kernel name that changed between environments.
 
 ## Clean rebuild after changing NIC config
 

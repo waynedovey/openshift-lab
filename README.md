@@ -1,3 +1,5 @@
+> **2026-08-22 network activation fix (v3):** SNO Agent networking now uses a logical `eth0` mapped by MAC, includes the MAC in NMState with `state: up`, and the vSphere playbook enforces both `connected: true` and `start_connected: true` before boot. See `FIXES-SNO-NETWORK-V3.md`.
+
 # OpenShift Hub, Spokes and Hosted Control Planes Lab
 
 This repository is pinned consistently to **OpenShift 4.21.25** for the SNO hub, Site-A, Site-B, and all Hosted Control Plane guests. RHACM uses `release-2.16` with MCE `2.11`.
@@ -14,6 +16,13 @@ This repository builds:
 - All spoke and HCP tenant clusters imported into RHACM on the hub.
 
 Run all commands from the repository root.
+
+## SNO Agent network portability
+
+The SNO static network configuration does **not** hard-code Linux interface names such as `ens33` or `ens192`. The AgentConfig uses the logical name `eth0` and maps it to the VMware vNIC by MAC address. During boot, the Agent Installer rewrites the generated NetworkManager connection to the actual kernel interface name. The default route is defined against the same logical name.
+
+`playbooks/01_render_agent_iso.yml` also runs `nmstatectl gc` before creating the ISO and stops if the generated NetworkManager configuration does not contain the configured node IP and default gateway. See `FIXES-SNO-NETWORK-V2.md`.
+
 
 ## Architecture
 
@@ -108,6 +117,8 @@ nano inventories/env/group_vars/all/main.yml
 ```
 
 It contains:
+
+> **SNO NIC portability:** the SNO Agent network does not hard-code `ens33`, `ens192`, or any other Linux device name. The vSphere VM and AgentConfig share `sno_node.mac_eth0`; Nmstate uses `identifier: mac-address` and the stable logical profile `primary`. The default route is explicitly rendered through that profile.
 
 - OpenShift release and cluster names.
 - SNO, Site-A, and Site-B networking.
@@ -626,3 +637,9 @@ The wait verifies that `NMState/nmstate` is `Available` and that every physical
 node has a `NodeNetworkState` object. Configuration of the primary interface,
 its underlying interface, or `br-ex` is intentionally not included. Add network
 policies only after identifying the correct secondary interfaces.
+
+### SNO network activation v4 note
+
+See `FIXES-SNO-NETWORK-V4.md`. The VM creation playbook no longer treats VMware
+`connected=false` as an error while the VM is powered off; it validates
+`start_connected` before boot and validates actual `connected=true` after power-on.

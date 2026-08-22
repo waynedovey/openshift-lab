@@ -61,6 +61,76 @@
         dest: "{{ rendered_dir }}/agent-config.yaml"
         mode: '0600'
 
+    - name: Load rendered AgentConfig for structural validation
+      ansible.builtin.set_fact:
+        rendered_agent_config: "{{ lookup('ansible.builtin.file', rendered_dir ~ '/agent-config.yaml') | from_yaml }}"
+
+    - name: Validate rendered SNO network uses Agent logical-name/MAC mapping and a default route
+      ansible.builtin.assert:
+        that:
+          - rendered_agent_config.hosts | length == 1
+          - rendered_agent_config.hosts[0].interfaces[0].name == sno_node.primary_logical_interface
+          - (rendered_agent_config.hosts[0].interfaces[0].macAddress | lower) == (sno_node.mac_eth0 | lower)
+          - rendered_agent_config.hosts[0].networkConfig.interfaces[0].name == sno_node.primary_logical_interface
+          - (rendered_agent_config.hosts[0].networkConfig.interfaces[0]['mac-address'] | lower) == (sno_node.mac_eth0 | lower)
+          - rendered_agent_config.hosts[0].networkConfig.interfaces[0].state == 'up'
+          - rendered_agent_config.hosts[0].networkConfig.routes.config[0].destination == default_ipv4_route_cidr
+          - (rendered_agent_config.hosts[0].networkConfig.routes.config[0]['next-hop-address'] | string) == (gateway | string)
+          - rendered_agent_config.hosts[0].networkConfig.routes.config[0]['next-hop-interface'] == sno_node.primary_logical_interface
+        fail_msg: >-
+          Rendered agent-config.yaml is missing the Agent logical-name/MAC mapping, the
+          NMState mac-address binding/state=up, or the IPv4 default route. The supported
+          Agent Installer pattern is: hosts.interfaces maps logical name -> MAC, and the
+          networkConfig uses that same logical name plus mac-address and state: up.
+
+    - name: Show rendered SNO route before NetworkManager generation
+      ansible.builtin.debug:
+        msg:
+          - "Agent mapping: {{ sno_node.primary_logical_interface }} -> {{ sno_node.mac_eth0 }}"
+          - "Default route: {{ default_ipv4_route_cidr }} via {{ gateway }} dev/logical-interface {{ sno_node.primary_logical_interface }}"
+
+    - name: Write standalone NMState input used for build-time validation
+      ansible.builtin.copy:
+        dest: "{{ rendered_dir }}/network-config.yaml"
+        mode: '0600'
+        content: "{{ rendered_agent_config.hosts[0].networkConfig | to_nice_yaml(indent=2, sort_keys=false) }}"
+
+    - name: Verify nmstatectl is available
+      ansible.builtin.command: nmstatectl --version
+      register: nmstatectl_version
+      changed_when: false
+
+    - name: Generate NetworkManager configuration exactly as Agent image generation does
+      ansible.builtin.command:
+        argv:
+          - nmstatectl
+          - gc
+          - "{{ rendered_dir }}/network-config.yaml"
+      register: nmstate_gc
+      changed_when: false
+
+    - name: Save generated NetworkManager configuration for troubleshooting
+      ansible.builtin.copy:
+        dest: "{{ rendered_dir }}/networkmanager-generated.yaml"
+        mode: '0600'
+        content: "{{ nmstate_gc.stdout }}
+"
+
+    - name: Refuse ISO creation if generated NetworkManager config lost IP or gateway
+      ansible.builtin.assert:
+        that:
+          - sno_node.ip in nmstate_gc.stdout
+          - gateway in nmstate_gc.stdout
+          - sno_node.primary_logical_interface in nmstate_gc.stdout
+        fail_msg: >-
+          nmstatectl accepted the YAML but its generated NetworkManager connection does not
+          contain the required SNO IP and gateway. ISO creation has been stopped before boot.
+          Inspect {{ rendered_dir }}/network-config.yaml and
+          {{ rendered_dir }}/networkmanager-generated.yaml.
+        success_msg: >-
+          Generated NetworkManager configuration contains both {{ sno_node.ip }} and default
+          gateway {{ gateway }}. Safe to continue with Agent ISO creation.
+
     - name: Copy installer inputs into install directory
       ansible.builtin.copy:
         src: "{{ rendered_dir }}/{{ item }}"

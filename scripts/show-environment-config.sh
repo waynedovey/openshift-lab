@@ -20,6 +20,8 @@ show 'Machine VLAN' machine_vlan_id
 show 'Gateway' gateway
 show 'DNS server' ad_dns_server
 show 'SNO node address' sno_node.ip
+show 'SNO Agent logical NIC' sno_node.primary_logical_interface
+show 'SNO NIC MAC' sno_node.mac_eth0
 show 'vCenter' vcenter_hostname
 show 'ESXi host' vsphere_esxi_hostname
 show 'Bastion' bastion_ip

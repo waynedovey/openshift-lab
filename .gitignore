@@ -1,0 +1,30 @@
+# Local Python / Ansible environment
+.venv/
+__pycache__/
+*.py[cod]
+.ansible/
+*.retry
+
+# OpenShift installer generated state and large artifacts
+build/
+*.iso
+
+# Local logs and temporary files
+*.log
+*.tmp
+*.swp
+*.swo
+*~
+
+# Local backup files
+*.bak
+*.bk
+
+# Local environment overrides / credentials
+.env
+.env.local
+
+# Editor / OS metadata
+.DS_Store
+.idea/
+.vscode/

@@ -115,8 +115,25 @@ def main() -> int:
                             "compute_resource": obj.name,
                             "path": rp_path(obj.resourcePool),
                         })
+
+                    # HostSystem objects are children of ComputeResource/ClusterComputeResource
+                    # through the .host property, not Folder.childEntity. The original walker
+                    # therefore returned Hosts: [] even when vCenter had ESXi hosts.
+                    for host in getattr(obj, "host", []) or []:
+                        result["hosts"].append({
+                            "datacenter": dc.name,
+                            "compute_resource": obj.name,
+                            "name": host.name,
+                        })
                 if isinstance(obj, vim.HostSystem):
                     result["hosts"].append({"datacenter": dc.name, "name": obj.name})
+
+        # Keep discovery output deterministic and avoid duplicate host entries.
+        unique_hosts = {}
+        for host in result["hosts"]:
+            key = (host.get("datacenter"), host.get("name"))
+            unique_hosts[key] = host
+        result["hosts"] = sorted(unique_hosts.values(), key=lambda item: (item.get("datacenter", ""), item.get("name", "")))
 
         print(json.dumps(result, indent=2, sort_keys=True))
     finally:
