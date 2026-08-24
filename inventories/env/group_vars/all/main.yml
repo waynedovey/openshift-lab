@@ -40,6 +40,17 @@ ad_dns_server: 10.23.74.100
 dns_servers:
   - "{{ ad_dns_server }}"
 default_ipv4_route_cidr: "0.0.0.0/0"
+
+# Deterministic live-ISO NetworkManager override. The Agent Installer's NMState
+# config remains the source of truth for the host, but the generated ISO is
+# post-processed with a MAC-bound NetworkManager keyfile so the live boot has
+# an active static profile and default gateway before the Agent TUI performs
+# its quay.io connectivity checks. No Linux interface name is hard-coded.
+sno_embed_direct_nm_keyfile: true
+sno_nm_profile_id: sno-primary
+sno_nm_autoconnect_priority: 999
+sno_nm_route_metric: 100
+coreos_installer_container_image: quay.io/coreos/coreos-installer:release
 machine_vlan_id: 3574
 secondary_vlan_id: 574
 
@@ -175,9 +186,10 @@ esxi_upload_no_log: false
 # "Device or resource busy" when the previous ISO is still mounted by a VM.
 iso_unique_per_upload: true
 
-# During Agent ISO installs, the VM must not reboot back into the ISO after RHCOS is written to disk.
-# 02_create_vsphere_vm.yml sets boot order to disk first with CD-ROM fallback.
-# 03_wait_install.yml also tries a best-effort CD-ROM disconnect after disk write reaches 100%.
+# During Agent ISO installs, 02_create_vsphere_vm.yml boots the freshly generated
+# Agent CD-ROM first. 03_wait_install.yml switches the VM back to disk-first as
+# soon as the RHCOS disk-write/reboot signal is detected and also attempts a
+# best-effort CD-ROM disconnect.
 # Some vSphere/IDE CD-ROM combos cannot hot-disconnect while powered on; by default that warning does not fail the install.
 sno_auto_disconnect_iso_after_disk_write: true
 sno_set_boot_disk_first_after_iso_disconnect: true
@@ -439,7 +451,7 @@ bm_nodes:
     role: master
     enabled: true
     bmc_ip: 10.23.74.81
-    boot_mac: "CHANGE_ME_B10_30_BOOT_NIC_MAC"
+    boot_mac: "BC:97:E1:6E:5E:E0"
     ip: 10.23.74.110
     primary_interface: eno33np0
     secondary_interface: eno34np1
@@ -450,7 +462,7 @@ bm_nodes:
     role: master
     enabled: true
     bmc_ip: 10.23.74.82
-    boot_mac: "CHANGE_ME_B10_31_BOOT_NIC_MAC"
+    boot_mac: "BC:97:E1:6E:40:C0"
     ip: 10.23.74.111
     primary_interface: eno33np0
     secondary_interface: eno34np1
@@ -461,7 +473,7 @@ bm_nodes:
     role: master
     enabled: true
     bmc_ip: 10.23.74.83
-    boot_mac: "CHANGE_ME_B10_33_BOOT_NIC_MAC"
+    boot_mac: "BC:97:E1:C3:F1:C0"
     ip: 10.23.74.112
     primary_interface: eno33np0
     secondary_interface: eno34np1
@@ -515,7 +527,7 @@ site_b_nodes:
     role: master
     enabled: true
     bmc_ip: 10.23.74.84
-    boot_mac: "CHANGE_ME_B10_34_BOOT_NIC_MAC"
+    boot_mac: "BC:97:E1:6E:6C:10"
     ip: 10.23.74.113
     primary_interface: eno33np0
     secondary_interface: eno34np1
@@ -526,7 +538,7 @@ site_b_nodes:
     role: master
     enabled: true
     bmc_ip: 10.23.74.85
-    boot_mac: "CHANGE_ME_B10_35_BOOT_NIC_MAC"
+    boot_mac: "BC:97:E1:C3:F6:80"
     ip: 10.23.74.114
     primary_interface: eno33np0
     secondary_interface: eno34np1
@@ -537,7 +549,7 @@ site_b_nodes:
     role: master
     enabled: true
     bmc_ip: 10.23.74.86
-    boot_mac: "CHANGE_ME_B10_36_BOOT_NIC_MAC"
+    boot_mac: "BC:97:E1:C3:F7:00"
     ip: 10.23.74.115
     primary_interface: eno33np0
     secondary_interface: eno34np1

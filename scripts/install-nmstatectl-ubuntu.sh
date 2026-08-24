@@ -41,11 +41,19 @@ fi
 # shellcheck source=/dev/null
 source "${VENV_DIR}/bin/activate"
 
-# Keep a working nmstatectl if one already exists.
-if command -v nmstatectl >/dev/null 2>&1; then
-  if nmstatectl --version >/dev/null 2>&1 || nmstatectl -h >/dev/null 2>&1; then
-    echo "nmstatectl already available: $(command -v nmstatectl)"
-    nmstatectl --version || nmstatectl -h | head -1 || true
+# Prefer a real/native nmstatectl when one exists outside the repo venv.
+# IMPORTANT: do not mistake an older .venv/bin/nmstatectl shim for an apt/native
+# install.  V8 did exactly that and exited before refreshing the corrected shim.
+SYSTEM_PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+native_nmstatectl="$(PATH="${SYSTEM_PATH}" command -v nmstatectl 2>/dev/null || true)"
+if [[ -n "${native_nmstatectl}" ]]; then
+  if "${native_nmstatectl}" --version >/dev/null 2>&1 || "${native_nmstatectl}" -h >/dev/null 2>&1; then
+    echo "Native nmstatectl already available: ${native_nmstatectl}"
+    # Remove any repo shim that would otherwise shadow the native binary while
+    # the venv is activated.
+    rm -f "${VENV_DIR}/bin/nmstatectl" "${VENV_DIR}/bin/nmstatectl.agent-shim.py"
+    hash -r
+    "${native_nmstatectl}" --version || "${native_nmstatectl}" -h | head -1 || true
     exit 0
   fi
 fi
@@ -64,11 +72,15 @@ if apt-cache show nmstate >/dev/null 2>&1; then
   sudo DEBIAN_FRONTEND=noninteractive apt-get install -y nmstate || true
 fi
 
-hash -r
-if command -v nmstatectl >/dev/null 2>&1; then
-  if nmstatectl --version >/dev/null 2>&1 || nmstatectl -h >/dev/null 2>&1; then
-    echo "nmstatectl installed by apt: $(command -v nmstatectl)"
-    nmstatectl --version || nmstatectl -h | head -1 || true
+# Re-check only the system PATH.  Never check the activated venv here, otherwise
+# an old repo shim will be mistaken for the package we just tried to install.
+native_nmstatectl="$(PATH="${SYSTEM_PATH}" command -v nmstatectl 2>/dev/null || true)"
+if [[ -n "${native_nmstatectl}" ]]; then
+  if "${native_nmstatectl}" --version >/dev/null 2>&1 || "${native_nmstatectl}" -h >/dev/null 2>&1; then
+    echo "nmstatectl installed natively: ${native_nmstatectl}"
+    rm -f "${VENV_DIR}/bin/nmstatectl" "${VENV_DIR}/bin/nmstatectl.agent-shim.py"
+    hash -r
+    "${native_nmstatectl}" --version || "${native_nmstatectl}" -h | head -1 || true
     exit 0
   fi
 fi
@@ -84,10 +96,8 @@ if [[ "${USE_SHIM}" != "true" ]]; then
 fi
 
 echo "Installing OpenShift Agent nmstatectl gc shim for Ubuntu..."
-# Preserve a broken/generated nmstatectl from previous attempts.
-if [[ -f "${VENV_DIR}/bin/nmstatectl" && ! -f "${VENV_DIR}/bin/nmstatectl.previous" ]]; then
-  mv "${VENV_DIR}/bin/nmstatectl" "${VENV_DIR}/bin/nmstatectl.previous"
-fi
+# Remove any stale repo shim before writing the current implementation.
+rm -f "${VENV_DIR}/bin/nmstatectl" "${VENV_DIR}/bin/nmstatectl.agent-shim.py"
 
 cat > "${VENV_DIR}/bin/nmstatectl.agent-shim.py" <<'PY'
 #!/usr/bin/env python3
@@ -104,7 +114,7 @@ except Exception as exc:
     print(f"nmstatectl agent shim requires PyYAML: {exc}", file=sys.stderr)
     sys.exit(2)
 
-VERSION = "Nmstate version: agent-shim-for-openshift-agent-ubuntu"
+VERSION = "Nmstate version: agent-shim-for-openshift-agent-ubuntu-v9"
 
 
 def usage() -> None:
@@ -142,11 +152,29 @@ def load_state(args: List[str]) -> Dict[str, Any]:
 
 
 def find_default_gateway(state: Dict[str, Any], iface: str) -> Optional[str]:
+    """Return the IPv4 default gateway for iface.
+
+    Do not use ``str(ipaddress.IPv4Network(0))`` here: Python renders that as
+    ``0.0.0.0/32``, not the default route ``0.0.0.0/0``.  That subtle bug
+    caused the shim to silently omit the gateway while preserving the address
+    and DNS settings.
+    """
     for route in (state.get("routes") or {}).get("config") or []:
         if not isinstance(route, dict):
             continue
-        if route.get("destination") in (str(ipaddress.IPv4Network(0)), "default") and route.get("next-hop-interface") == iface:
-            return route.get("next-hop-address")
+        if route.get("next-hop-interface") != iface:
+            continue
+        destination = str(route.get("destination") or "").strip().lower()
+        is_default = destination == "default"
+        if not is_default:
+            try:
+                network = ipaddress.ip_network(destination, strict=False)
+                is_default = network.version == 4 and network.prefixlen == 0
+            except ValueError:
+                is_default = False
+        if is_default:
+            gateway = route.get("next-hop-address")
+            return str(gateway) if gateway is not None else None
     return None
 
 
@@ -209,15 +237,17 @@ def build_connection(state: Dict[str, Any], iface: Dict[str, Any]) -> List[str]:
             if not 0 <= prefix <= 32:
                 raise ValueError(f"interface {name} has invalid IPv4 prefix-length {prefix}")
             lines.append("method=manual")
+            lines.append(f"address1={ip}/{prefix}")
             if gw:
                 validate_ip(str(gw))
-                lines.append(f"address1={ip}/{prefix},{gw}")
-            else:
-                lines.append(f"address1={ip}/{prefix}")
+                lines.append(f"gateway={gw}")
+                lines.append("never-default=false")
+                lines.append("route-metric=100")
             if dns:
                 for server in dns:
                     validate_ip(server)
                 lines.append("dns=" + ";".join(dns) + ";")
+            lines.append("may-fail=false")
     else:
         lines.append("method=disabled")
     lines.append("")
@@ -286,6 +316,41 @@ chmod 0755 "${VENV_DIR}/bin/nmstatectl"
 hash -r
 command -v nmstatectl
 nmstatectl --version
+
+# Self-test the exact default-route behavior that previously regressed.
+selftest="$(mktemp)"
+trap 'rm -f "${selftest}"' EXIT
+cat > "${selftest}" <<'EOF_SELFTEST'
+interfaces:
+  - name: eth0
+    type: ethernet
+    state: up
+    mac-address: 00:50:56:aa:bb:cc
+    ipv4:
+      enabled: true
+      dhcp: false
+      address:
+        - ip: 192.0.2.10
+          prefix-length: 24
+    ipv6:
+      enabled: false
+routes:
+  config:
+    - destination: 0.0.0.0/0
+      next-hop-address: 192.0.2.1
+      next-hop-interface: eth0
+dns-resolver:
+  config:
+    server:
+      - 192.0.2.53
+EOF_SELFTEST
+selftest_output="$(nmstatectl gc "${selftest}")"
+if ! grep -q 'gateway=192.0.2.1' <<<"${selftest_output}"; then
+  echo "ERROR: nmstatectl shim self-test failed: default gateway was dropped." >&2
+  echo "${selftest_output}" >&2
+  exit 1
+fi
+echo "nmstatectl default-route self-test passed (gateway=192.0.2.1)."
 
 echo "nmstatectl shim installed successfully."
 echo "Note: this shim is intended only for this repo's simple static ethernet Agent ISO config."

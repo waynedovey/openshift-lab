@@ -40,6 +40,17 @@ ad_dns_server: 10.23.74.100
 dns_servers:
   - "{{ ad_dns_server }}"
 default_ipv4_route_cidr: "0.0.0.0/0"
+
+# Deterministic live-ISO NetworkManager override. The Agent Installer's NMState
+# config remains the source of truth for the host, but the generated ISO is
+# post-processed with a MAC-bound NetworkManager keyfile so the live boot has
+# an active static profile and default gateway before the Agent TUI performs
+# its quay.io connectivity checks. No Linux interface name is hard-coded.
+sno_embed_direct_nm_keyfile: true
+sno_nm_profile_id: sno-primary
+sno_nm_autoconnect_priority: 999
+sno_nm_route_metric: 100
+coreos_installer_container_image: quay.io/coreos/coreos-installer:release
 machine_vlan_id: 3574
 secondary_vlan_id: 574
 
@@ -52,12 +63,20 @@ sno_node:
   fqdn: "{{ sno_node.hostname }}.{{ cluster_fqdn }}"
   ip: 10.23.74.90
 
-  # Match the SNO vNIC by MAC, not by a Linux device name such as ens33/ens192.
-  primary_profile: primary
+  # IMPORTANT: this is a LOGICAL Agent Installer interface name, not a Linux
+  # kernel device name. The same logical name is used in hosts.interfaces and
+  # networkConfig, while mac_eth0 identifies the physical VM NIC. The Agent
+  # boot-time pre-network-manager-config service rewrites the logical name to
+  # the actual kernel name (ens33, ens192, eno1, etc.) before NetworkManager.
+  #
+  # Do not replace this with an environment-specific Linux device name.
+  primary_logical_interface: eth0
   mac_eth0: "00:50:56:23:74:90"
 
+  # Secondary NIC is disabled by default for the SNO hub. If enabled later,
+  # use another logical name and MAC; the Agent performs the same mapping.
   secondary_nic_enabled: false
-  secondary_profile: secondary
+  secondary_logical_interface: eth1
   mac_eth1: ""
 
 # VIPs are only used when sno_install_platform is "vsphere".
@@ -167,9 +186,10 @@ esxi_upload_no_log: false
 # "Device or resource busy" when the previous ISO is still mounted by a VM.
 iso_unique_per_upload: true
 
-# During Agent ISO installs, the VM must not reboot back into the ISO after RHCOS is written to disk.
-# 02_create_vsphere_vm.yml sets boot order to disk first with CD-ROM fallback.
-# 03_wait_install.yml also tries a best-effort CD-ROM disconnect after disk write reaches 100%.
+# During Agent ISO installs, 02_create_vsphere_vm.yml boots the freshly generated
+# Agent CD-ROM first. 03_wait_install.yml switches the VM back to disk-first as
+# soon as the RHCOS disk-write/reboot signal is detected and also attempts a
+# best-effort CD-ROM disconnect.
 # Some vSphere/IDE CD-ROM combos cannot hot-disconnect while powered on; by default that warning does not fail the install.
 sno_auto_disconnect_iso_after_disk_write: true
 sno_set_boot_disk_first_after_iso_disconnect: true
@@ -976,16 +996,70 @@ portworx_pure_sites:
     pod: "{{ site_b_pure_flasharray_pod }}"
 
 # ---------------------------------------------------------------------------
-# HCP tenant authentication policy
+# Kubernetes NMState on physical HCP hosting clusters
 # ---------------------------------------------------------------------------
-# Applies HTPasswd OAuth to the HostedCluster resources on Site-A/Site-B.
-# In HCP, OAuth configuration is synced from the hosting cluster via the
-# HostedCluster resource, not by patching OAuth directly inside the guest cluster.
-hcp_tenant_policy_namespace: hcp-tenant-auth-policies
+# Installed through the existing Site-A and Site-B RHACM Governance bundles.
+# These policies target only the physical hosting ManagedClusters, not the SNO
+# management hub and not any hosted tenant clusters.
+nmstate_enabled: true
+nmstate_namespace: openshift-nmstate
+nmstate_operatorgroup_name: openshift-nmstate
+nmstate_subscription_name: kubernetes-nmstate-operator
+nmstate_operator_package: kubernetes-nmstate-operator
+nmstate_operator_channel: stable
+nmstate_operator_source: redhat-operators
+nmstate_operator_source_namespace: openshift-marketplace
+nmstate_install_plan_approval: Automatic
+nmstate_instance_name: nmstate
+nmstate_wait_timeout_seconds: 1800
+
+# ---------------------------------------------------------------------------
+# Shared lab administrator authentication
+# ---------------------------------------------------------------------------
+# HTPasswd is used only for this isolated Pod 74 lab. The requested credentials
+# work immediately after the ZIP is overlaid. Defining the two Vault variables
+# below overrides these defaults without changing the repository.
+lab_admin_enabled: true
+lab_admin_username: "{{ vault_cluster_admin_username | default('admin', true) }}"
+lab_admin_password: "{{ vault_cluster_admin_password | default('Password1!', true) }}"
+lab_admin_idp_name: local-htpasswd
+lab_admin_htpasswd_secret_name: lab-admin-htpasswd
+lab_admin_cluster_admin_binding_name: lab-admin-cluster-admin
+
+# RHACM policy source and placement.
+lab_admin_policy_namespace: lab-admin-policies
+lab_admin_policy_rendered_dir: "{{ build_root }}/lab-admin-policies"
+lab_admin_source_secret_name: lab-admin-htpasswd-source
+lab_admin_password_checksum_annotation: openshift-lab.redhat.com/password-checksum
+lab_admin_standard_policy_name: lab-admin-auth
+lab_admin_hcp_rbac_policy_name: lab-admin-hcp-rbac
+lab_admin_standard_placement_name: lab-admin-standard
+lab_admin_standard_binding_name: lab-admin-standard-binding
+lab_admin_hcp_placement_name: lab-admin-hcp
+lab_admin_hcp_binding_name: lab-admin-hcp-binding
+lab_admin_standard_cluster_label_key: openshift-lab.redhat.com/admin-standard
+lab_admin_hcp_cluster_label_key: openshift-lab.redhat.com/admin-hcp
+lab_admin_cluster_label_value: "true"
+lab_admin_policy_wait_retries: 120
+lab_admin_policy_wait_delay_seconds: 5
+
+# Standard OpenShift clusters receive the HTPasswd Secret, OAuth provider and
+# cluster-admin binding through RHACM Governance. Missing clusters are deferred
+# and labeled automatically on a later idempotent run.
+lab_admin_standard_managed_clusters:
+  - local-cluster
+  - "{{ bm_cluster_name }}"
+  - "{{ site_b_cluster_name }}"
+
+# HCP guest OAuth is managed on each HostedCluster resource. After import, an
+# RHACM RBAC-only policy continuously enforces the cluster-admin binding.
+lab_admin_hcp_managed_clusters: "{{ hcp_tenants | map(attribute='managed_cluster_name') | list }}"
+
+# Compatibility aliases retained for the existing HCP tenant-auth scripts and
+# templates. They now use the shared administrator credentials above.
+hcp_tenant_policy_namespace: "{{ lab_admin_policy_namespace }}"
 hcp_tenant_policy_rendered_dir: "{{ build_root }}/hcp-tenant-auth-policies"
 hcp_tenant_policy_remediation_action: enforce
-
-# Hosting clusters that own the HostedCluster resources.
 hcp_tenant_site_a_hosting_placement_name: hcp-tenant-auth-site-a-hosting
 hcp_tenant_site_b_hosting_placement_name: hcp-tenant-auth-site-b-hosting
 hcp_tenant_site_a_hosting_binding_name: hcp-tenant-auth-site-a-hosting-binding
@@ -996,30 +1070,20 @@ hcp_tenant_site_b_hosting_label_key: hcp-tenant-auth-site-b
 hcp_tenant_site_b_hosting_label_value: "true"
 hcp_tenant_site_a_oauth_policy_name: site-a-hcp-tenants-htpasswd-oauth
 hcp_tenant_site_b_oauth_policy_name: site-b-hcp-tenants-htpasswd-oauth
-site_a_hcp_htpasswd_secret_name: htpasswd-site-a-hcp-tenants
-site_b_hcp_htpasswd_secret_name: htpasswd-site-b-hcp-tenants
-
-# Legacy v18 tenant-policy names kept only so the v19 playbook can remove the
-# old tenant-targeted RBAC policy wiring if it exists.
+site_a_hcp_htpasswd_secret_name: "{{ lab_admin_htpasswd_secret_name }}"
+site_b_hcp_htpasswd_secret_name: "{{ lab_admin_htpasswd_secret_name }}"
 hcp_tenant_clusterset: hcp-tenants
 hcp_tenant_policy_placement_name: hcp-tenant-auth-placement
 hcp_tenant_policy_binding_name: hcp-tenant-auth-binding
 hcp_tenant_policy_cluster_label_key: hcp-tenant-auth
 hcp_tenant_policy_cluster_label_value: "true"
-hcp_tenant_cluster_admin_policy_name: hcp-tenant-admin-cluster-admin
-hcp_tenant_managed_clusters:
-  - site-a-hcp-t1-px
-  - site-a-hcp-t2-kv
-  - site-b-hcp-t1-px
-  - site-b-hcp-t2-kv
+hcp_tenant_cluster_admin_policy_name: "{{ lab_admin_hcp_rbac_policy_name }}"
+hcp_tenant_cluster_admin_binding_name: "{{ lab_admin_cluster_admin_binding_name }}"
+hcp_tenant_managed_clusters: "{{ lab_admin_hcp_managed_clusters }}"
 hcp_tenant_required_managed_clusters:
   - "{{ bm_cluster_name }}"
   - "{{ site_b_cluster_name }}"
+hcp_tenant_admin_username: "{{ lab_admin_username }}"
+hcp_tenant_admin_password_note: "Password is read from Vault or the Pod 74 lab default"
+hcp_tenant_htpasswd_idp_name: "{{ lab_admin_idp_name }}"
 
-# Tenant admin credentials.
-hcp_tenant_admin_username: admin
-hcp_tenant_admin_password_note: pureuser
-hcp_tenant_htpasswd_idp_name: local-htpasswd
-# htpasswd bcrypt entry generated with: htpasswd -nbB admin pureuser
-# Secret data is base64 for: admin:$2y$05$tZC6lUchB.enLXorMDXWZO4ZRibpivHlqB0/dUXKI.3HsWYcqF/PW
-hcp_tenant_htpasswd_file_b64: YWRtaW46JDJ5JDA1JHRaQzZsVWNoQi5lbkxYb3JNRFhXWk80WlJpYnBpdkhscUIwL2RVWEtJLjNIc1dZY3FGL1BXCg==

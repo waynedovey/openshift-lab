@@ -61,6 +61,32 @@
         dest: "{{ rendered_dir }}/agent-config.yaml"
         mode: '0600'
 
+    - name: Render deterministic live-ISO NetworkManager keyfile
+      ansible.builtin.template:
+        src: "{{ repo_root }}/templates/sno-primary.nmconnection.j2"
+        dest: "{{ rendered_dir }}/sno-primary.nmconnection"
+        mode: '0600'
+      when: sno_embed_direct_nm_keyfile | default(true) | bool
+
+    - name: Strictly validate rendered live-ISO NetworkManager keyfile
+      ansible.builtin.command:
+        argv:
+          - python3
+          - "{{ repo_root }}/scripts/validate-networkmanager-keyfile.py"
+          - "{{ rendered_dir }}/sno-primary.nmconnection"
+          - "{{ sno_node.ip }}/{{ machine_cidr_prefix }}"
+          - "{{ gateway }}"
+          - "{{ dns_servers | join(',') }}"
+          - "{{ sno_node.mac_eth0 }}"
+      register: sno_nm_keyfile_validation
+      changed_when: false
+      when: sno_embed_direct_nm_keyfile | default(true) | bool
+
+    - name: Show strict live-ISO NetworkManager keyfile validation
+      ansible.builtin.debug:
+        msg: "{{ sno_nm_keyfile_validation.stdout }}"
+      when: sno_embed_direct_nm_keyfile | default(true) | bool
+
     - name: Load rendered AgentConfig for structural validation
       ansible.builtin.set_fact:
         rendered_agent_config: "{{ lookup('ansible.builtin.file', rendered_dir ~ '/agent-config.yaml') | from_yaml }}"
@@ -120,7 +146,8 @@
       ansible.builtin.assert:
         that:
           - sno_node.ip in nmstate_gc.stdout
-          - gateway in nmstate_gc.stdout
+          - ('gateway=' ~ (gateway | string)) in nmstate_gc.stdout
+          - ('never-default=false') in nmstate_gc.stdout
           - sno_node.primary_logical_interface in nmstate_gc.stdout
         fail_msg: >-
           nmstatectl accepted the YAML but its generated NetworkManager connection does not
@@ -158,6 +185,159 @@
         PYTHONPATH: "/usr/lib/python3/dist-packages:{{ ansible_env.PYTHONPATH | default('') }}"
       args:
         creates: "{{ agent_iso_local }}"
+
+    - name: Check for local coreos-installer binary
+      ansible.builtin.shell: command -v coreos-installer
+      args:
+        executable: /bin/bash
+      register: coreos_installer_local
+      changed_when: false
+      failed_when: false
+      when: sno_embed_direct_nm_keyfile | default(true) | bool
+
+    - name: Check for Podman fallback for coreos-installer
+      ansible.builtin.shell: command -v podman
+      args:
+        executable: /bin/bash
+      register: podman_local
+      changed_when: false
+      failed_when: false
+      when:
+        - sno_embed_direct_nm_keyfile | default(true) | bool
+        - (coreos_installer_local.rc | default(1)) != 0
+
+    - name: Refuse to continue without a coreos-installer execution path
+      ansible.builtin.assert:
+        that:
+          - ((coreos_installer_local.rc | default(1)) == 0) or ((podman_local.rc | default(1)) == 0)
+        fail_msg: >-
+          A deterministic live-ISO NetworkManager keyfile is enabled, but neither
+          coreos-installer nor Podman is available. Run scripts/bootstrap-ubuntu-24.04.sh
+          (V6 installs Podman) or install coreos-installer manually.
+      when: sno_embed_direct_nm_keyfile | default(true) | bool
+
+    - name: Embed deterministic NetworkManager keyfile with local coreos-installer
+      ansible.builtin.command:
+        argv:
+          - coreos-installer
+          - iso
+          - network
+          - embed
+          - --force
+          - --keyfile
+          - "{{ rendered_dir }}/sno-primary.nmconnection"
+          - --output
+          - "{{ install_dir }}/agent.network-fixed.x86_64.iso"
+          - "{{ agent_iso_local }}"
+      when:
+        - sno_embed_direct_nm_keyfile | default(true) | bool
+        - (coreos_installer_local.rc | default(1)) == 0
+
+    - name: Embed deterministic NetworkManager keyfile with Podman coreos-installer
+      ansible.builtin.command:
+        argv:
+          - podman
+          - run
+          - --rm
+          - --userns=keep-id
+          - -v
+          - "{{ build_root }}:/work"
+          - -w
+          - /work
+          - "{{ coreos_installer_container_image }}"
+          - iso
+          - network
+          - embed
+          - --force
+          - --keyfile
+          - rendered/sno-primary.nmconnection
+          - --output
+          - install/agent.network-fixed.x86_64.iso
+          - install/agent.x86_64.iso
+      when:
+        - sno_embed_direct_nm_keyfile | default(true) | bool
+        - (coreos_installer_local.rc | default(1)) != 0
+        - (podman_local.rc | default(1)) == 0
+
+    - name: Replace Agent ISO with deterministic network-embedded ISO
+      ansible.builtin.command:
+        argv:
+          - mv
+          - -f
+          - "{{ install_dir }}/agent.network-fixed.x86_64.iso"
+          - "{{ agent_iso_local }}"
+      when: sno_embed_direct_nm_keyfile | default(true) | bool
+
+    - name: Extract embedded live-ISO network config with local coreos-installer
+      ansible.builtin.command:
+        argv:
+          - coreos-installer
+          - iso
+          - network
+          - extract
+          - "{{ agent_iso_local }}"
+      register: embedded_nm_extract_local
+      changed_when: false
+      when:
+        - sno_embed_direct_nm_keyfile | default(true) | bool
+        - (coreos_installer_local.rc | default(1)) == 0
+
+    - name: Extract embedded live-ISO network config with Podman coreos-installer
+      ansible.builtin.command:
+        argv:
+          - podman
+          - run
+          - --rm
+          - --userns=keep-id
+          - -v
+          - "{{ build_root }}:/work"
+          - -w
+          - /work
+          - "{{ coreos_installer_container_image }}"
+          - iso
+          - network
+          - extract
+          - install/agent.x86_64.iso
+      register: embedded_nm_extract_podman
+      changed_when: false
+      when:
+        - sno_embed_direct_nm_keyfile | default(true) | bool
+        - (coreos_installer_local.rc | default(1)) != 0
+        - (podman_local.rc | default(1)) == 0
+
+    - name: Select extracted embedded network config
+      ansible.builtin.set_fact:
+        embedded_nm_extract: >-
+          {{ embedded_nm_extract_local.stdout
+             if ((coreos_installer_local.rc | default(1)) == 0)
+             else embedded_nm_extract_podman.stdout }}
+      when: sno_embed_direct_nm_keyfile | default(true) | bool
+
+    - name: Save exact network config embedded in final ISO
+      ansible.builtin.copy:
+        dest: "{{ rendered_dir }}/iso-embedded-network.txt"
+        mode: '0600'
+        content: "{{ embedded_nm_extract }}\n"
+      when: sno_embed_direct_nm_keyfile | default(true) | bool
+
+    - name: Refuse final ISO when embedded profile lacks required live networking
+      ansible.builtin.assert:
+        that:
+          - (embedded_nm_extract | regex_search('(?m)^address1=' ~ (sno_node.ip | regex_escape) ~ '/' ~ (machine_cidr_prefix | string) ~ '$')) is not none
+          - (embedded_nm_extract | regex_search('(?m)^gateway=' ~ (gateway | regex_escape) ~ '$')) is not none
+          - (embedded_nm_extract | lower | regex_search('(?m)^mac-address=' ~ (sno_node.mac_eth0 | lower | regex_escape) ~ '$')) is not none
+          - (embedded_nm_extract | regex_search('(?m)^autoconnect=true$')) is not none
+          - (embedded_nm_extract | regex_search('(?m)^never-default=false$')) is not none
+          - (embedded_nm_extract | regex_search('(?m)^dns=' ~ ((dns_servers | join(';')) | regex_escape) ~ ';$')) is not none
+        fail_msg: >-
+          The final Agent ISO does not contain the deterministic NetworkManager
+          profile required for the live environment. Inspect
+          {{ rendered_dir }}/iso-embedded-network.txt.
+        success_msg: >-
+          Final Agent ISO contains a MAC-bound autoconnect profile for
+          {{ sno_node.mac_eth0 }} with {{ sno_node.ip }}/{{ machine_cidr_prefix }},
+          gateway {{ gateway }}, and DNS {{ dns_servers | join(', ') }}.
+      when: sno_embed_direct_nm_keyfile | default(true) | bool
 
     - name: Confirm ISO exists
       ansible.builtin.stat:

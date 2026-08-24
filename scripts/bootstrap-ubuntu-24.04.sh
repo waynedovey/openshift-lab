@@ -37,6 +37,7 @@ sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
   openssh-client \
   openssl \
   pipx \
+  podman \
   python3 \
   python3-full \
   python3-pip \

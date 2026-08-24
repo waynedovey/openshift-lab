@@ -1,0 +1,20 @@
+[connection]
+id={{ sno_nm_profile_id | default('sno-primary') }}
+type=802-3-ethernet
+autoconnect=true
+autoconnect-priority={{ sno_nm_autoconnect_priority | default(999) }}
+
+[802-3-ethernet]
+mac-address={{ sno_node.mac_eth0 }}
+
+[ipv4]
+method=manual
+address1={{ sno_node.ip }}/{{ machine_cidr_prefix }}
+gateway={{ gateway }}
+dns={{ dns_servers | join(';') }};
+never-default=false
+may-fail=false
+route-metric={{ sno_nm_route_metric | default(100) }}
+
+[ipv6]
+method=disabled
