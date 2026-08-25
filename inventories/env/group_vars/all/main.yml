@@ -912,7 +912,7 @@ site_a_pure_flasharray_name: SV16-X90R4-B10-01
 site_a_pure_flasharray_mgmt_endpoint: "10.23.74.50"
 site_a_pure_flasharray_ct0_endpoint: "10.23.74.51"
 site_a_pure_flasharray_ct1_endpoint: "10.23.74.52"
-site_a_pure_flasharray_file_vip: "10.23.74.55"
+site_a_pure_flasharray_file_vip: ""
 site_a_pure_flasharray_username: pureuser
 site_a_pure_flasharray_password: >-
   {{
