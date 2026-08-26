@@ -8,7 +8,7 @@ An Ansible-based lab for deploying and managing an OpenShift environment with:
 - Multicluster Engine (**MCE 2.11**)
 - Two physical OpenShift spoke clusters: **Site-A** and **Site-B**
 - Hosted Control Plane (HCP) tenant clusters on the spokes
-- Pure Storage and Portworx integration
+- Everpure and Portworx integration
 
 Run commands from the repository root unless stated otherwise.
 
@@ -62,7 +62,7 @@ Typical values include:
 - SNO VM CPU, memory and disks
 - Site-A and Site-B networking
 - Bare-metal/iDRAC information
-- Pure Storage and Portworx configuration
+- Everpure and Portworx configuration
 - HCP tenant sizing and network ranges
 
 Display the active configuration:
@@ -232,7 +232,7 @@ Site-specific day-2 workflows can be run independently:
 ./scripts/run-site-b-day2.sh
 ```
 
-## 6. Portworx and Pure Storage
+## 6. Portworx and Everpure
 
 Deploy or reconcile Site-A storage:
 
